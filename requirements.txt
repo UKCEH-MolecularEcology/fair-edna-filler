@@ -1,0 +1,9 @@
+# Core – required
+# (no third-party packages needed for basic .docx/.txt parsing)
+
+# For PDF support (install at least one):
+pdfplumber>=0.11          # recommended – best text extraction quality
+# pypdf>=4.0              # lightweight alternative
+
+# For Claude AI-powered parsing (optional but recommended):
+anthropic>=0.40

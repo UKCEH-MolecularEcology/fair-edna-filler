@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FAIRe Metadata Filler</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <div class="intro">
+          <div class="brand">
+            <span class="brand-mark">F</span>
+            <span>FAIRe Metadata Filler</span>
+          </div>
+          <h1>Turn an eDNA report into a filled metadata workbook.</h1>
+          <p>
+            Upload a report and the FAIRe full template. The tool extracts project,
+            sample, sequencing and bioinformatics details, fills supported sheets, and
+            marks missing mandatory values with approved FAIRe wording.
+          </p>
+          <p class="hint">
+            Add a Claude API key for AI-powered extraction — it understands free-text
+            reports far better than rule-based parsing.
+          </p>
+        </div>
+
+        <form id="uploadForm" class="upload-panel">
+          <label class="drop-zone" for="report">
+            <input id="report" name="report" type="file"
+                   accept=".doc,.docx,.txt,.pdf" required />
+            <span class="file-kind">Report</span>
+            <strong id="reportName">Choose a report file</strong>
+            <small>.doc · .docx · .pdf · .txt</small>
+          </label>
+
+          <label class="drop-zone" for="template">
+            <input id="template" name="template" type="file" accept=".xlsx" required />
+            <span class="file-kind">Template</span>
+            <strong id="templateName">Choose the FAIRe full template</strong>
+            <small>.xlsx</small>
+          </label>
+
+          <div class="api-key-row">
+            <label for="apiKey">
+              Claude API key
+              <span class="optional-tag">optional – enables AI parsing</span>
+            </label>
+            <input id="apiKey" name="apiKey" type="password"
+                   placeholder="sk-ant-…  (never stored or logged)" autocomplete="off" />
+          </div>
+
+          <button class="primary-action" type="submit">
+            <span>Fill metadata workbook</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 12h12m-5-5 5 5-5 5" />
+            </svg>
+          </button>
+        </form>
+      </section>
+
+      <aside class="status-panel">
+        <div class="status-card">
+          <h2>Run status</h2>
+          <div id="statusText" class="status-text">Waiting for files.</div>
+          <div id="progress" class="progress"><span></span></div>
+        </div>
+
+        <div id="resultCard" class="result-card is-hidden">
+          <h2>Workbook ready</h2>
+          <dl class="summary-grid">
+            <div><dt>Project</dt><dd id="projectTitle">-</dd></div>
+            <div><dt>Parsed with</dt><dd id="parsingMethod">-</dd></div>
+            <div><dt>Institution</dt><dd id="institution">-</dd></div>
+            <div><dt>Lakes / sites</dt><dd id="lakeCount">-</dd></div>
+            <div><dt>Sampling rounds</dt><dd id="roundCount">-</dd></div>
+            <div><dt>Assays</dt><dd id="assayList">-</dd></div>
+            <div><dt>Sample rows</dt><dd id="sampleRows">-</dd></div>
+            <div><dt>Run rows</dt><dd id="experimentRows">-</dd></div>
+          </dl>
+          <a id="downloadLink" class="download-action" href="#">Download filled workbook</a>
+        </div>
+
+        <div class="note-card">
+          <h2>What it fills</h2>
+          <ul>
+            <li><strong>projectMetadata</strong> – all project, PCR, sequencing &amp; bioinformatics fields</li>
+            <li><strong>sampleMetadata</strong> – one row per sample / field blank</li>
+            <li><strong>experimentRunMetadata</strong> – one row per sample × assay</li>
+          </ul>
+          <p>
+            Fields not found in the report are filled with approved FAIRe
+            missing-value wording so the workbook is always valid.
+          </p>
+          <h2 style="margin-top:1rem">AI vs rule-based parsing</h2>
+          <p>
+            Without a Claude API key the tool uses regular-expression rules
+            (reliable for standard Defra/UKCEH report formats).
+            With a key it sends the report text to Claude Haiku for richer,
+            more flexible extraction — better for unusual formats.
+          </p>
+        </div>
+      </aside>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
