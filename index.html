@@ -228,6 +228,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         <div><dt>Sites</dt><dd id="rLakes">—</dd></div>
         <div><dt>Assays</dt><dd id="rAssays" style="grid-column:1/-1">—</dd></div>
         <div><dt>Sample rows</dt><dd id="rSamples">—</dd></div>
+        <div><dt>Run rows</dt><dd id="rRuns">—</dd></div>
       </dl>
       <button class="dl-btn" id="dlBtn">
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -848,6 +849,93 @@ async function fillWorkbook(templateBytes, meta, reportFilename) {
     zip.file('xl/worksheets/sheet4.xml', s4xml);
   }
 
+
+  // ── Fill experimentRunMetadata sheet (sheet8) ──────────────────────────────
+  // One row per sample × assay. Connects samp_name → lib_id → seq_run_id.
+  const s8file = zip.file('xl/worksheets/sheet8.xml');
+  if (s8file) {
+    let s8xml = await s8file.async('text');
+
+    // Keep header rows 1-3
+    const r8re = /<row[^>]+r="(\d+)"[^>]*>[\s\S]*?<\/row>/g;
+    const hdr8 = [];
+    let m8;
+    while ((m8 = r8re.exec(s8xml)) !== null) {
+      if (parseInt(m8[0].match(/r="(\d+)"/)[1]) <= 3) hdr8.push(m8[0]);
+    }
+
+    // Column map for experimentRunMetadata (A=0 based, matching header row 3)
+    const RUN_COLS = {
+      samp_name:0, assay_name:1, pcr_plate_id:2, lib_id:3, seq_run_id:4,
+      lib_conc:5, lib_conc_unit:6, lib_conc_meth:7, phix_perc:8,
+      mid_forward:9, mid_reverse:10,
+      filename:11, filename2:12, checksum_filename:13, checksum_filename2:14,
+      associatedSequences:15, input_read_count:16, output_read_count:17,
+      output_otu_num:18, otu_num_tax_assigned:19,
+    };
+
+    const locs8   = meta.sampling_locations || [{code:'SITE', name:'sampling location'}];
+    const rounds8 = meta.sampling_rounds    || [{code:'R1', iso_date:MISS}];
+
+    let runRows = '';
+    let rn8 = 4;
+
+    for (const loc of locs8) {
+      for (const round of rounds8) {
+        // 4 subsamples + 1 field blank per lake per round
+        const sampIds = [];
+        for (let sub = 1; sub <= 4; sub++) sampIds.push(`${loc.code}_${round.code}_sub${sub}`);
+        sampIds.push(`${loc.code}_${round.code}_BLANK`);   // field blank
+
+        for (const sid of sampIds) {
+          for (const assay of (meta.assays || [])) {
+            // seq_run_id differs by assay for this project (12S on separate 200-cycle run)
+            const seqRun = (assay.name === '12S' || assay.name === '12S rRNA')
+              ? (meta.seq_run_id_12s || MISS)
+              : (meta.seq_run_id     || MISS);
+
+            const libId = `${sid}_${assay.name}`;
+
+            const rec = {
+              samp_name:         sid,
+              assay_name:        assay.name,
+              pcr_plate_id:      MISS,
+              lib_id:            libId,
+              seq_run_id:        seqRun,
+              lib_conc:          MISS,
+              lib_conc_unit:     'nM',
+              lib_conc_meth:     meta.conc_method || MISS,
+              phix_perc:         meta.phix_perc   || MISS,
+              mid_forward:       MISS,
+              mid_reverse:       MISS,
+              filename:          MISS,
+              filename2:         MISS,
+              checksum_filename: MISS,
+              checksum_filename2:MISS,
+              associatedSequences: MISS,
+              input_read_count:  MISS,
+              output_read_count: MISS,
+              output_otu_num:    MISS,
+              otu_num_tax_assigned: MISS,
+            };
+
+            let cells = '';
+            for (const [field, col] of Object.entries(RUN_COLS)) {
+              if (rec[field] !== undefined) {
+                cells += cellXml(colLetter(col), rn8, addStr(rec[field]));
+              }
+            }
+            runRows += `<row r="${rn8}">${cells}</row>`;
+            rn8++;
+          }
+        }
+      }
+    }
+
+    s8xml = replaceSheetData(s8xml, hdr8.join('') + runRows);
+    zip.file('xl/worksheets/sheet8.xml', s8xml);
+  }
+
   // ── Update shared strings ───────────────────────────────────────────────
   const total = ss.length;
   ssRawNew = ssRawNew.replace(/count="\d+"/, `count="${total}"`).replace(/uniqueCount="\d+"/, `uniqueCount="${total}"`);
@@ -910,8 +998,13 @@ $('runBtn').addEventListener('click', async () => {
     set('rMethod',  method);
     set('rLakes',   (meta.sampling_locations||[]).length || '—');
     set('rAssays',  (meta.assays||[]).map(a=>a.name).join(', '));
-    set('rSamples', ((meta.sampling_locations||[{code:'SITE'}]).length *
-                     (meta.sampling_rounds||[{code:'R1'}]).length * 5));
+    const nLocs   = (meta.sampling_locations||[{}]).length;
+    const nRounds = (meta.sampling_rounds   ||[{}]).length;
+    const nAssays = (meta.assays            ||[{}]).length;
+    const sampCount = nLocs * nRounds * 5;  // 4 subsamples + 1 blank
+    const runCount  = sampCount * nAssays;
+    set('rSamples', sampCount);
+    set('rRuns',    runCount);
 
     setStatus('Done — review the summary then download your workbook.', 100);
     $('resultCard').classList.remove('hidden');
