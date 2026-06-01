@@ -1,0 +1,13 @@
+=== Mon Jun  1 09:51:42 BST 2026 ===
+Python  : python3.11
+Version : Python 3.11.13
+Workdir : /Users/susbus/Library/CloudStorage/OneDrive-UKCEH/Projects/FAIRe_metadata/faire_metadata_tool
+
+[notice] A new release of pip is available: 25.1.1 -> 26.1.2
+[notice] To update, run: /opt/homebrew/opt/python@3.11/bin/python3.11 -m pip install --upgrade pip
+error: uninstall-no-record-file
+
+× Cannot uninstall cffi 1.17.1
+╰─> The package's contents are unknown: no RECORD file was found for cffi.
+
+hint: The package was installed by brew. You should check if it can uninstall the package.
