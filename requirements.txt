@@ -7,3 +7,5 @@ pdfplumber>=0.11          # recommended – best text extraction quality
 
 # For Claude AI-powered parsing (optional but recommended):
 anthropic>=0.40
+pystray>=0.19
+pillow>=10.0

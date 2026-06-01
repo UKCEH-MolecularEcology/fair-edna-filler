@@ -1,111 +1,95 @@
-const form         = document.querySelector("#uploadForm");
-const reportInput  = document.querySelector("#report");
-const templateInput= document.querySelector("#template");
-const reportName   = document.querySelector("#reportName");
-const templateName = document.querySelector("#templateName");
-const statusText   = document.querySelector("#statusText");
-const progressBar  = document.querySelector("#progress span");
-const resultCard   = document.querySelector("#resultCard");
-const downloadLink = document.querySelector("#downloadLink");
-const submitButton = document.querySelector(".primary-action");
-
-let latestDownloadUrl = "";
-let latestOutputName  = "FAIRe_metadata_filled.xlsx";
-
-const fields = {
-  projectTitle:   document.querySelector("#projectTitle"),
-  parsingMethod:  document.querySelector("#parsingMethod"),
-  institution:    document.querySelector("#institution"),
-  lakeCount:      document.querySelector("#lakeCount"),
-  roundCount:     document.querySelector("#roundCount"),
-  assayList:      document.querySelector("#assayList"),
-  sampleRows:     document.querySelector("#sampleRows"),
-  experimentRows: document.querySelector("#experimentRows"),
-};
-
-reportInput.addEventListener("change", () => {
-  reportName.textContent = reportInput.files?.[0]?.name ?? "Choose a report file";
-});
-templateInput.addEventListener("change", () => {
-  templateName.textContent = templateInput.files?.[0]?.name ?? "Choose the FAIRe full template";
+// ── Mode tabs ──────────────────────────────────────────────────────────────
+document.querySelectorAll('.mode-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.mode-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+  });
 });
 
-function setStatus(message, progress) {
-  statusText.textContent = message;
-  progressBar.style.width = `${progress}%`;
+// ── Upload form ────────────────────────────────────────────────────────────
+const form          = document.querySelector('#uploadForm');
+const reportInput   = document.querySelector('#report');
+const templateInput = document.querySelector('#template');
+const reportName    = document.querySelector('#reportName');
+const templateName  = document.querySelector('#templateName');
+const statusText    = document.querySelector('#statusText');
+const progressBar   = document.querySelector('#progress span');
+const resultCard    = document.querySelector('#resultCard');
+const downloadLink  = document.querySelector('#downloadLink');
+const submitBtn     = document.querySelector('.primary-action');
+
+let latestUrl  = '';
+let latestName = 'FAIRe_metadata_filled.xlsx';
+
+reportInput.addEventListener('change',   () => { reportName.textContent   = reportInput.files?.[0]?.name   ?? 'Choose a report file'; });
+templateInput.addEventListener('change', () => { templateName.textContent = templateInput.files?.[0]?.name ?? 'Choose the FAIRe full template (.xlsx)'; });
+
+function setStatus(msg, pct) {
+  statusText.textContent    = msg;
+  progressBar.style.width   = pct + '%';
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  resultCard.classList.add("is-hidden");
-  submitButton.disabled = true;
-
-  const hasApiKey = !!document.querySelector("#apiKey")?.value.trim();
-  setStatus(
-    hasApiKey
-      ? "Uploading files and starting AI-powered extraction…"
-      : "Uploading files and reading the report…",
-    20
-  );
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  resultCard.classList.add('is-hidden');
+  submitBtn.disabled = true;
+  const hasKey = !!document.querySelector('#apiKey')?.value.trim();
+  setStatus(hasKey ? 'Uploading — AI extraction in progress…' : 'Uploading and parsing the report…', 18);
 
   const data = new FormData(form);
-
   try {
     const pulse = setInterval(() => {
-      const cur = parseFloat(progressBar.style.width) || 30;
-      progressBar.style.width = `${Math.min(cur + 5, 85)}%`;
-    }, 600);
+      const cur = parseFloat(progressBar.style.width) || 25;
+      progressBar.style.width = Math.min(cur + 4, 82) + '%';
+    }, 700);
 
-    const response = await fetch("/api/fill", { method: "POST", body: data });
+    const res  = await fetch('/api/fill', { method: 'POST', body: data });
     clearInterval(pulse);
+    const payload = await res.json();
 
-    const payload = await response.json();
-    if (!response.ok || payload.error) {
-      throw new Error(payload.error || "The workbook could not be filled.");
-    }
+    if (!res.ok || payload.error) throw new Error(payload.error || 'The workbook could not be filled.');
 
-    fields.projectTitle.textContent   = payload.projectTitle  || "-";
-    fields.institution.textContent    = payload.institution   || "-";
-    fields.parsingMethod.textContent  = payload.parsingMethod === "claude-ai"
-      ? "Claude AI" : "Rule-based (regex)";
-    fields.lakeCount.textContent      = payload.lakes         ?? "-";
-    fields.roundCount.textContent     = payload.rounds        ?? "-";
-    fields.assayList.textContent      = Array.isArray(payload.assays)
-      ? payload.assays.join(", ") : "-";
-    fields.sampleRows.textContent     = payload.sampleRows    ?? "-";
-    fields.experimentRows.textContent = payload.experimentRows ?? "-";
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val ?? '—'; };
+    set('rProject',     payload.projectTitle);
+    set('rMethod',      payload.parsingMethod === 'claude-ai' ? '✦ Claude AI' : 'Rule-based (regex)');
+    set('rInstitution', payload.institution);
+    set('rLakes',       payload.lakes);
+    set('rRounds',      payload.rounds);
+    set('rAssays',      Array.isArray(payload.assays) ? payload.assays.join(', ') : payload.assays);
+    set('rSampleRows',  payload.sampleRows);
+    set('rRunRows',     payload.experimentRows);
 
-    latestDownloadUrl = payload.downloadUrl;
-    latestOutputName  = payload.outputName || "FAIRe_metadata_filled.xlsx";
-    downloadLink.href     = latestDownloadUrl;
-    downloadLink.download = latestOutputName;
+    latestUrl  = payload.downloadUrl;
+    latestName = payload.outputName || 'FAIRe_metadata_filled.xlsx';
+    downloadLink.href     = latestUrl;
+    downloadLink.download = latestName;
 
-    setStatus("Done — review the summary then download the workbook.", 100);
-    resultCard.classList.remove("is-hidden");
+    setStatus('Done — review the summary then download your workbook.', 100);
+    resultCard.classList.remove('is-hidden');
   } catch (err) {
-    setStatus(err.message, 100);
+    setStatus('Error: ' + err.message, 100);
   } finally {
-    submitButton.disabled = false;
+    submitBtn.disabled = false;
   }
 });
 
-downloadLink.addEventListener("click", async (event) => {
-  if (!latestDownloadUrl) return;
-  event.preventDefault();
-  setStatus("Preparing download…", 100);
+downloadLink.addEventListener('click', async e => {
+  if (!latestUrl) return;
+  e.preventDefault();
+  setStatus('Preparing download…', 100);
   try {
-    const response = await fetch(latestDownloadUrl);
-    if (!response.ok) throw new Error("Could not retrieve the completed workbook.");
-    const blob = await response.blob();
+    const res  = await fetch(latestUrl);
+    if (!res.ok) throw new Error('Could not retrieve the workbook.');
+    const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
-    const a    = Object.assign(document.createElement("a"), { href: url, download: latestOutputName });
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const a    = Object.assign(document.createElement('a'), { href: url, download: latestName });
+    document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setStatus("Download started.", 100);
+    setStatus('Download started.', 100);
   } catch (err) {
-    setStatus(err.message + " — opening link directly.", 100);
-    window.location.href = latestDownloadUrl;
+    setStatus(err.message + ' — opening link directly.', 100);
+    window.location.href = latestUrl;
   }
 });

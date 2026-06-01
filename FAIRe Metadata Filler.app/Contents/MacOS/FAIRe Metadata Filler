@@ -1,0 +1,37 @@
+#!/bin/bash
+# Resolve the directory this .app is in, then the tool folder next to it.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+TOOL_DIR="$(dirname "$APP_DIR")"
+
+# If there is a faire_metadata_tool subfolder next to the .app, use it.
+if [ -d "$APP_DIR/../faire_metadata_tool" ]; then
+    TOOL_DIR="$APP_DIR/../faire_metadata_tool"
+elif [ -f "$APP_DIR/../server.py" ]; then
+    TOOL_DIR="$APP_DIR/.."
+fi
+
+cd "$TOOL_DIR" || exit 1
+
+# Find Python 3.9+
+PYTHON=""
+for candidate in python3 python; do
+    if command -v "$candidate" &>/dev/null; then
+        VER=$("$candidate" -c "import sys; print(sys.version_info[:2] >= (3,9))" 2>/dev/null)
+        if [ "$VER" = "True" ]; then
+            PYTHON="$candidate"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    osascript -e 'display alert "Python 3.9+ not found" message "Please install Python from python.org/downloads and try again." buttons {"OK"} default button "OK"'
+    exit 1
+fi
+
+# Install deps silently on first run
+"$PYTHON" -m pip install --quiet --upgrade pystray pillow pdfplumber anthropic 2>/dev/null || true
+
+# Launch tray app (opens browser automatically)
+exec "$PYTHON" tray_app.py
