@@ -32,7 +32,7 @@ echo.
 echo   FAIRe Metadata Filler
 echo   Installing / checking dependencies...
 echo.
-%PYTHON% -m pip install --quiet --upgrade pdfplumber anthropic 2>nul
+%PYTHON% -m pip install --quiet pdfplumber anthropic 2>nul
 
 echo   Starting server at http://127.0.0.1:8787
 echo   Opening browser...

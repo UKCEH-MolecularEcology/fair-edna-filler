@@ -39,7 +39,7 @@ If Not pyFound Then
 End If
 
 ' Install dependencies silently (first run only)
-shell.Run python & " -m pip install --quiet --upgrade pystray pillow pdfplumber anthropic", _
+shell.Run python & " -m pip install --quiet pystray pillow pdfplumber anthropic", _
     0, True
 
 ' Launch the tray app without a console window (0 = hidden)

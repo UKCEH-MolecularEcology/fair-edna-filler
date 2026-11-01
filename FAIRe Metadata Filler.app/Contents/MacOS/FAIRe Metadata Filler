@@ -81,8 +81,23 @@ LOG="$TOOL_DIR/faire_startup.log"
     echo "Workdir : $TOOL_DIR"
 } > "$LOG"
 
-# ── 6. Install / update dependencies silently ─────────────────────────────────
-"$PYTHON" -m pip install --quiet --upgrade pystray pillow pdfplumber anthropic >> "$LOG" 2>&1 || true
+# ── 6. Install only MISSING dependencies (never upgrade/replace existing ones,
+#       which breaks Homebrew-managed packages like cffi) ──────────────────────
+MISSING=$("$PYTHON" -c "
+import importlib.util as u
+pkgs = [('pystray','pystray'), ('PIL','pillow'), ('pdfplumber','pdfplumber'), ('anthropic','anthropic')]
+print(' '.join(p for m, p in pkgs if u.find_spec(m) is None))
+" 2>>"$LOG")
+
+if [ -n "$MISSING" ]; then
+    echo "Installing missing packages: $MISSING" >> "$LOG"
+    "$PYTHON" -m pip install --quiet $MISSING >> "$LOG" 2>&1 \
+    || "$PYTHON" -m pip install --quiet --user $MISSING >> "$LOG" 2>&1 \
+    || "$PYTHON" -m pip install --quiet --user --break-system-packages $MISSING >> "$LOG" 2>&1 \
+    || echo "WARNING: could not install $MISSING – continuing anyway" >> "$LOG"
+else
+    echo "All dependencies already installed." >> "$LOG"
+fi
 
 # ── 7. Launch (tray app opens browser automatically) ─────────────────────────
 exec "$PYTHON" tray_app.py >> "$LOG" 2>&1

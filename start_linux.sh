@@ -27,7 +27,13 @@ fi
 echo ""
 echo "  FAIRe Metadata Filler"
 echo "  Installing / checking dependencies..."
-"$PYTHON" -m pip install --quiet --upgrade pdfplumber anthropic 2>/dev/null || true
+MISSING=$("$PYTHON" -c "import importlib.util as u; print(' '.join(p for p in ['pdfplumber','anthropic'] if u.find_spec(p) is None))")
+if [ -n "$MISSING" ]; then
+    "$PYTHON" -m pip install --quiet $MISSING 2>/dev/null \
+    || "$PYTHON" -m pip install --quiet --user $MISSING 2>/dev/null \
+    || "$PYTHON" -m pip install --quiet --user --break-system-packages $MISSING 2>/dev/null \
+    || echo "  (Could not install $MISSING – PDF/AI features may be unavailable)"
+fi
 
 echo "  Starting server at http://127.0.0.1:8787"
 echo "  Press Ctrl+C to stop."
