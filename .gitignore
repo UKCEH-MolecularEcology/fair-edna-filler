@@ -1,7 +1,11 @@
 __pycache__/
 *.py[cod]
-uploads/
+.venv/
+venv/
+uploads/*
+!uploads/.gitkeep
 outputs/
+*.log
 *.xlsx
 *.doc
 *.docx
@@ -9,8 +13,5 @@ outputs/
 *.txt
 !requirements.txt
 .env
-.venv/
-venv/
-*.log
 .DS_Store
 Thumbs.db

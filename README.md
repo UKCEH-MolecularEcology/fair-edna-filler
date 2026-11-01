@@ -2,7 +2,7 @@
 
 **Automatically fill the [FAIRe eDNA metadata template](https://fair-edna.github.io/download.html) from a project report.**
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
+**[▶ Open the tool in your browser](https://ukceh-molecularecology.github.io/fair-edna-filler/)** · [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
 
 Upload a Word document, PDF, or plain-text report and the tool extracts project information, sampling details, PCR/sequencing methods, and bioinformatics parameters — then writes them into the correct cells of the FAIRe Excel workbook. Fields that cannot be found are filled with approved [FAIRe missing-value wording](https://fair-edna.github.io/guidelines.html#missing-values) so the workbook is always valid for the [FAIRe-fier validator](https://shiny.csiro.au/FAIRe-fier/).
 
@@ -41,88 +41,48 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 
 ---
 
-## Option A — Just open a web page (no installation)
+## How to use it
 
-Download the ZIP (green **Code** button → *Download ZIP*), extract it, and double-click **`index.html`**. It opens in your browser and does everything locally — your files are never uploaded. The first time, it downloads its Python engine (about 10 MB), so you need an internet connection once.
+Pick whichever suits you — all three give the same result. Works on **macOS, Windows and Linux**.
 
----
+### 1. In your browser — no installation (recommended)
 
-## Option A2 — Google Colab
+**Online:** open **https://ukceh-molecularecology.github.io/fair-edna-filler/**
+
+**Offline copy:** green **Code** button → *Download ZIP* → extract → double-click **`index.html`**.
+
+Then choose your report and the FAIRe template, click **Fill metadata workbook**, and download the result. Everything runs inside your browser — your files are never uploaded anywhere. The first visit downloads the tool's Python engine (about 10 MB), so you need an internet connection once. Works in current Chrome, Edge, Firefox and Safari.
+
+### 2. Google Colab
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
 
-Run entirely in the cloud — no Python or terminal needed. Open the notebook, choose *Runtime → Run all*, upload your report, and download the result. The official FAIRe FULL template is fetched automatically (you can tick a box to upload your own, e.g. one made with FAIRe-ator).
+Open the notebook, choose *Runtime → Run all*, upload your report, and download the result. The official FAIRe FULL template is fetched automatically (tick a box to upload your own, e.g. one made with FAIRe-ator). Needs a Google account.
 
----
-
-## Option B — Desktop app (no terminal, runs in background)
-
-> **One-time requirement:** Python 3.9+ must be installed. [Download from python.org](https://www.python.org/downloads/) — tick **"Add Python to PATH"** on Windows.
-
-### macOS
-
-1. Download the ZIP from the green **Code** button above → Extract.
-2. Double-click **`FAIRe Metadata Filler.app`**.
-   - First launch: macOS may show a security warning → right-click → Open → Open.
-   - Dependencies install automatically (internet needed the first time, ~30 seconds).
-3. The tool icon appears in your **menu bar** (top-right). Your browser opens automatically.
-4. To reopen: click the menu-bar icon → *Open FAIRe Filler*.
-5. To stop: click the icon → *Quit*.
-
-### Windows
-
-1. Download the ZIP → Extract.
-2. Double-click **`start_windows_silent.vbs`**.
-   - A tray icon appears in the **system tray** (bottom-right corner).
-   - Your browser opens automatically.
-3. To reopen: double-click the tray icon or double-click the `.vbs` again.
-4. To stop: right-click the tray icon → *Quit*.
-
-> **First-time tip:** Pin the launcher to your taskbar / Dock for instant access.
-
----
-
-## Option C — Command line
+### 3. Python (for coders)
 
 ```bash
 git clone https://github.com/UKCEH-MolecularEcology/fair-edna-filler.git
 cd fair-edna-filler
-pip install -r requirements.txt          # pystray, pillow, pdfplumber, anthropic
-ANTHROPIC_API_KEY=sk-ant-... python3 tray_app.py   # tray icon + browser
+pip install -r requirements.txt        # pdfplumber (PDF support), anthropic (optional Claude extraction)
+python3 server.py                      # local web app at http://127.0.0.1:8787
 ```
 
-Or run the web server directly:
-```bash
-python3 server.py                        # opens http://127.0.0.1:8787
+Or use it from your own scripts:
+
+```python
+import server
+meta = server.parse_report_regex(server.extract_report_text("report.doc"))
+summary = server.fill_workbook("FAIRe_checklist_v1.0.2_FULLtemplate.xlsx", meta, "report.doc", "filled.xlsx")
+print(summary["notes"])                # things to check by hand
 ```
 
-### Environment variables
-
-| Variable | Default | Description |
+| Environment variable | Default | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | *(none)* | Claude API key for AI-powered extraction |
+| `ANTHROPIC_API_KEY` | *(none)* | Claude API key for AI-assisted extraction |
 | `FAIRE_CLAUDE_MODEL` | `claude-haiku-5-5` | Claude model used for extraction |
-| `FAIRE_TOOL_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for public) |
+| `FAIRE_TOOL_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to serve on a network) |
 | `FAIRE_TOOL_PORT` | `8787` | Port |
-
----
-
-## Option D — Online / hosted
-
-### Docker
-
-```bash
-docker build -t faire-filler .
-docker run -p 8787:8787 -e ANTHROPIC_API_KEY=sk-ant-... faire-filler
-```
-
-### Railway / Render / Fly.io
-
-Add a `Procfile`:
-```
-web: python3 server.py
-```
-Set `ANTHROPIC_API_KEY`, `FAIRE_TOOL_HOST=0.0.0.0`, `FAIRE_TOOL_PORT=$PORT` in the platform dashboard.
 
 ---
 
@@ -142,7 +102,7 @@ Set `ANTHROPIC_API_KEY`, `FAIRE_TOOL_HOST=0.0.0.0`, `FAIRE_TOOL_PORT=$PORT` in t
 | `.doc` (Word 97–2003) | ✅ Always — read directly, no Word or LibreOffice needed |
 | `.docx` | ✅ Always |
 | `.txt` | ✅ Always |
-| `.pdf` | ✅ Text-based PDFs (needs `pdfplumber` for the desktop/server versions; installed by the launchers). Scanned PDFs need OCR first. |
+| `.pdf` | ✅ Text-based PDFs (the Python version needs `pdfplumber`). Scanned PDFs need OCR first. |
 
 ---
 
@@ -150,24 +110,19 @@ Set `ANTHROPIC_API_KEY`, `FAIRE_TOOL_HOST=0.0.0.0`, `FAIRE_TOOL_PORT=$PORT` in t
 
 ```
 fair-edna-filler/
-├── server.py                    # All the logic: reading reports, extraction, filling, web server
-├── index.html                   # No-install version (runs server.py in the browser via Pyodide)
-├── build_standalone.py          # Rebuilds index.html from server.py — run after editing server.py
-├── standalone/shell.html        # Page layout used by build_standalone.py
-├── tray_app.py                  # System-tray launcher (no terminal needed)
+├── index.html                   # Browser version (runs server.py in the browser via Pyodide)
 ├── FAIRe_Metadata_Filler.ipynb  # Google Colab notebook
-├── requirements.txt
-├── Dockerfile
-├── FAIRe Metadata Filler.app/   # macOS app bundle (double-click)
-├── start_windows_silent.vbs     # Windows silent launcher (double-click)
-├── start_mac.command            # macOS terminal fallback
-├── start_windows.bat            # Windows terminal fallback
-├── start_linux.sh               # Linux launcher
-└── static/
-    ├── index.html               # Browser UI (UKCEH branded)
-    ├── app.js
-    └── styles.css
+├── server.py                    # All the logic: reading reports, extraction, filling, local web app
+├── static/                      # Page used by `python3 server.py`
+├── uploads/                     # Working folder for batch processing (contents not tracked)
+├── build_standalone.py          # Rebuilds index.html from server.py
+├── standalone/shell.html        # Page layout used by build_standalone.py
+└── requirements.txt
 ```
+
+### Publishing the browser version (maintainers)
+
+In the GitHub repo: **Settings → Pages → Build and deployment → Deploy from a branch → `main` / `(root)`**. The page is then served at the address above and updates automatically on every push.
 
 ---
 

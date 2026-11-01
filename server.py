@@ -31,7 +31,7 @@ from urllib.parse import unquote
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / 'static'
 OUTPUT_DIR = APP_DIR / 'outputs'
-UPLOAD_DIR = APP_DIR / 'uploads'
+UPLOAD_DIR = APP_DIR / 'uploads'     # reserved for batch processing (multiple reports / a folder)
 
 
 # ════════════════════════════════════════════════════════════════════════════
