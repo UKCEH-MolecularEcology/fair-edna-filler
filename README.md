@@ -26,7 +26,8 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 - **Controlled vocabularies** are read from the template's own `Drop-down values` sheet; values outside the list are written as `other: …`, as FAIRe requires.
 - **Nothing is guessed.** If the report doesn't state something (e.g. primer sequences in a table that is an image, exact coordinates), the cell gets the FAIRe wording `missing: not provided` (or `not applicable: control sample` for lab controls).
 - **IDs are generated** from the report structure (e.g. `BASS_R1_01`, `BASS_R1_FB`, `EXTBLANK_01`, `PCRNEG_16S_01`, `run_20260219_600cycle`). Replace them with your lab's IDs before publishing.
-- **You check every value before it is written.** The tool shows a review table: each value, the sentence from the report it came from, and an edit box. Correct anything that's wrong, empty a box if the report doesn't really say it, or fill in something it missed.
+- **You only check what needs checking.** Values that come with a clear source sentence and pass the FAIRe checks are accepted automatically. The review table opens on the few flagged ones, each with the reason, the sentence it came from and an edit box. See [Automatic review](#automatic-review).
+- **Before download the workbook is validated** against the template's own field types: numbers, dates, ISO durations, ontology terms, controlled vocabularies, mandatory fields and sample/library ID links. Safe fixes are made automatically, e.g. `25 µL` → `25`, `24 hours` → `PT24H`, `14/07/2025` → `2025-07-14`.
 - After filling, the page lists **"Check these by hand"** notes (for example inconsistencies spotted in the report).
 - The rest of the template — dropdowns, term notes, formatting, other sheets — is left exactly as it was.
 
@@ -54,13 +55,13 @@ Pick whichever suits you — all three give the same result. Works on **macOS, W
 
 **Offline copy:** green **Code** button → *Download ZIP* → extract → double-click **`index.html`**.
 
-Then choose your report, click **Read report**, check the values in the review table, click **Fill workbook with these values**, and download the result — the official FAIRe template is built in. (When opening the downloaded `index.html` directly, also choose the template file from the `template` folder: browsers don't let a local page read neighbouring files.) Everything runs inside your browser — your files are never uploaded anywhere. The first visit downloads the tool's Python engine (about 10 MB), so you need an internet connection once. Works in current Chrome, Edge, Firefox and Safari.
+Then choose your report (and, optionally, a saved profile), click **Read report**, look at the values under *Needs a look*, click **Fill workbook with these values**, and download the result — the official FAIRe template is built in. (When opening the downloaded `index.html` directly, also choose the template file from the `template` folder: browsers don't let a local page read neighbouring files.) Everything runs inside your browser — your files are never uploaded anywhere. The first visit downloads the tool's Python engine (about 10 MB), so you need an internet connection once. Works in current Chrome, Edge, Firefox and Safari.
 
 ### 2. Google Colab
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
 
-Open the notebook, run the cells in order: upload your report, check the review table (put corrections in the `edits` cell), then fill and download. The official FAIRe FULL template is fetched automatically (tick a box to upload your own, e.g. one made with FAIRe-ator). Needs a Google account.
+Open the notebook and run the cells in order: upload your report (and optionally a profile), look at the *needs a look* table (put corrections in the `edits` cell), then fill and download. The official FAIRe FULL template is fetched automatically (tick a box to upload your own, e.g. one made with FAIRe-ator). Needs a Google account.
 
 ### 3. Python (for coders)
 
@@ -75,33 +76,62 @@ python3 server.py uploads/             # every report in a folder  -> outputs/
 python3 server.py report.doc -t my_template.xlsx -o results/
 ```
 
+The review CSV lists what needs a look first. To correct values without the browser, type your value into its `your_value` column (`-` empties a value), then run:
+
+```bash
+python3 server.py report.pdf --edits outputs/report_review.csv --save-profile lab.json   # apply corrections, remember them
+python3 server.py uploads/ --profile lab.json                                            # next reports: corrections re-applied
+python3 server.py report.pdf --local-ai                                                  # + second opinion from a local model
+```
+
 The `uploads/` folder is a convenient place to drop several reports for batch filling; its contents are never committed to git.
 
 Or use it from your own scripts:
 
 ```python
 import server
-meta = server.parse_report_regex(server.extract_report_text("report.doc"))
-for item in server.review_items(meta):  # each value with the sentence it came from
-    print(item["id"], "=", item["value"], "|", item["evidence"])
-server.apply_review(meta, {"project.project_name": "My corrected title"})   # optional corrections
+meta = server.prepare(server.extract_report_text("report.doc"))   # built-in reader + primer library
+for item in server.review(meta):        # status: ok / check / missing, with reasons and source sentence
+    if item["status"] == "check":
+        print(item["id"], "=", item["value"], "|", item["reasons"], "|", item["evidence"])
+server.apply_review(meta, {"project:project_name": "My corrected title"})   # optional corrections
 summary = server.fill_workbook(server.TEMPLATE_PATH, meta, "report.doc", "filled.xlsx")   # bundled template
 print(summary["notes"])                # things to check by hand
 ```
 
 | Environment variable | Default | Description |
 |---|---|---|
-| `FAIRE_CLAUDE_MODEL` | `claude-haiku-5-5` | Claude model used for extraction |
+| `FAIRE_CLAUDE_MODEL` | `claude-haiku-5-5` | Claude model (non-confidential reports only) |
+| `FAIRE_LOCAL_MODEL` | `qwen2.5:7b` | Ollama model used by `--local-ai` |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama address; only this computer is allowed |
 | `FAIRE_TOOL_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to serve on a network) |
 | `FAIRE_TOOL_PORT` | `8787` | Port |
 
 ---
 
+## Automatic review
+
+The tool decides for each value whether it can be **accepted automatically** or **needs a look**:
+
+| Accepted automatically when… | Flagged for a look when… |
+|---|---|
+| it comes with a source sentence from the report (from the *Methods* section, for methods values) | there's no source sentence, or the sentence is outside the Methods section |
+| it passes the template's format check (number, date, duration, ontology term, vocabulary) | the format is wrong, or the number is unusual (e.g. annealing at 95 °C) |
+| a primer sequence matches a published primer in the built-in library | a primer differs from the published sequence, or is listed for another marker or direction |
+| the report gives one value | the report gives different values in different places ("the report also gives: …") |
+| your saved profile or a second reader agrees | your profile or a second reader disagrees, or filled a gap |
+
+**Primer and database library.** Common eDNA primers are built in: MiFish, 12S-V5, Tele02, Leray/Geller COI, Folmer, fwh, BF3/BR2, 515F/806R/926R, 341F/785R, 1391f/EukBr, TAReuk, diatom rbcL, ITS and trnL g/h. Each is stored with its sequence and reference. If a report prints a sequence, the tool adds the primer's name and reference. If it only names the primer, the sequence is filled from the library and flagged. Add more primers to `PRIMER_LIBRARY` in `server.py`.
+
+**Profiles: learning from your corrections.** After you correct values, click **Save my corrections** in the browser; in Colab, tick *save_profile*; on the command line, use `--save-profile`. You get a small `.json` file. Load it with the next report and the same corrections are applied automatically. A correction is applied when the tool finds the same value it found last time, or finds nothing; anything else is flagged. Use profiles for things like the lab's contact, licence, kit naming or a primer that is always named in a table image. Share the file with colleagues to reuse the same corrections.
+
+**Local AI second opinion (optional, Python only).** With [Ollama](https://ollama.com) installed (`ollama pull qwen2.5:7b`), `python3 server.py report.pdf --local-ai` asks a model running on your own computer to read the Methods. It must quote the report for every value, like Claude. Where it agrees, values are accepted. Where it disagrees, they are flagged. Gaps it fills are flagged for confirmation. The report never leaves your computer: the tool refuses to send it to any address other than this machine.
+
 ## Privacy and how values are found
 
 **By default nothing leaves your computer.** A built-in reader looks for the usual ways methods are written in eDNA reports and papers: primer sequences and names, PCR recipes, filters, kits, sequencers, bioinformatics tools and reference databases. It works out which assay each value belongs to. Where a report has a *Methods* section, it reads that section only, so numbers from the results or introduction are not picked up. References are ignored. Every value keeps the sentence it came from, and you see it in the review table.
 
-**Claude (optional, off by default).** For reports that are *not confidential*, you can tick *"This report is not confidential"* and enter a Claude API key. The report text is then sent to Anthropic's API. Claude must quote the sentence behind each value, and any value whose quote is not in the report is dropped. Never use this for sensitive or unpublished reports.
+**Claude (optional, off by default).** For reports that are *not confidential*, you can tick *"This report is not confidential"* and enter a Claude API key. The report text is then sent to Anthropic's API, and Claude gives a second opinion in the same way as the local AI. Claude must quote the sentence behind each value, and any value whose quote is not in the report is dropped. Never use this for sensitive or unpublished reports.
 
 **Other languages.** The built-in reader is written for English. Reports in other languages are detected and flagged; primer sequences, numbers, kit and tool names are still found, but expect more gaps to fill by hand.
 
@@ -109,7 +139,13 @@ print(summary["notes"])                # things to check by hand
 
 ### How well does it work?
 
-`bench/run_benchmark.py` runs the tool on a folder of reports and compares the result with the published FAIRe example workbooks for the same studies. On 14 public reports and papers, three of which have a published FAIRe workbook, the values it filled were mostly right: 61 right, 13 different from the published workbook. Most of those 13 are naming differences, e.g. "Qiagen DNeasy Blood & Tissue kit" vs "Qiagen Blood & Tissue Kit". The other 46 checked values were left for you to fill in, typically things a report doesn't state in words, or values in tables that are images. That is why the review step exists.
+`bench/run_benchmark.py` runs the tool on a folder of reports and compares the result with the published FAIRe example workbooks for the same studies. On 14 public reports and papers, three of which have a published workbook, 120 values could be checked:
+
+- 61 were right and 13 differed from the published workbook. Most of the 13 are naming or rounding differences, e.g. "Qiagen DNeasy Blood & Tissue kit" vs "Qiagen Blood & Tissue Kit", or 12.5 vs 13 µL. About four are real errors, such as a storage temperature.
+- 46 were not found: things a report doesn't state in words, or values in tables that are images.
+- Of the values **accepted automatically**, 42 were right and 11 differed (the naming differences above, plus about three real errors). 21 values were **flagged for a look**; 19 of those were right.
+
+So expect to look at roughly 10–20 flagged values per report, plus the mandatory fields the report doesn't state.
 
 ```bash
 python3 bench/run_benchmark.py path/to/reports/   # writes bench/results.md and bench/values.csv

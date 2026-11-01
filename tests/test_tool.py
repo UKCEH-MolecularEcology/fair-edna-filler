@@ -145,6 +145,67 @@ for sheet in ('sampleMetadata', 'experimentRunMetadata'):
 check(ids['run_samples'] <= set(ids['sampleMetadata']), 'every run row links to a sample in sampleMetadata')
 check(not vocab_bad, 'all controlled-vocabulary values are valid' + (f' – {sorted(set(vocab_bad))[:5]}' if vocab_bad else ''))
 
+# ── 5. automatic checks ─────────────────────────────────────────────────────
+import json, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+text = server.extract_report_text(ROOT / 'tests' / 'sample_report.txt')
+meta = server.prepare(text)
+coi = next(a for a in meta['assays'] if a['marker'] == 'COI')
+check(coi.get('primer_fwd') == 'GGDACWGGWTGAACWGTWTAYCCHCC', 'primer library fills the fwhF2 sequence the report only names')
+items = server.review(meta, template)
+by_id = {it['id']: it for it in items}
+ci = next(i for i, a in enumerate(meta['assays']) if a['marker'] == 'COI')
+check(by_id[f'assay:{ci}:pcr_primer_forward']['status'] == 'check', 'a library-filled sequence is marked for checking')
+check(by_id['project:institution']['status'] == 'ok', 'a value with a source sentence is accepted automatically')
+counts = server.review_summary(items)
+check(counts['ok'] > counts['check'] > 0, f'most values accepted automatically ({counts["ok"]} ok, {counts["check"]} to check)')
+check(server.check_value('numeric', '25 µL') == ('25', None) and server.check_value('fixed format (PnYnMnWnDTnHnMnS)', '24 hours') == ('PT24H', None)
+      and server.check_value('fixed format (yyyy-mm-dd)', '14/07/2025') == ('2025-07-14', None)
+      and server.check_value('integer', 'three')[1], 'validation fixes units, durations and dates, and flags non-numbers')
+
+edits = {'project:license': 'CC-BY 4.0', f'assay:{ci}:commercial_mm': 'Q5 master mix (NEB)'}
+prof = server.profile_from_review(meta, edits, 'test lab')
+again = server.prepare(text, profile=prof)
+items2 = {it['id']: it for it in server.review(again, template)}
+check(items2['project:license']['value'] == 'CC-BY 4.0' and items2['project:license']['status'] == 'ok'
+      and items2[f'assay:{ci}:commercial_mm']['value'] == 'Q5 master mix (NEB)', 'a saved profile re-applies corrections to the next report')
+
+reply = {'project_title': 'Example eDNA survey of two upland lakes for automated testing', 'filter_diameter': 47,
+         'project_contact': 'nobody@example.org', 'sequencing_location': 'UKCEH Wallingford',
+         'assays': [{'marker': 'COI', 'annealingTemp': 50, 'pcr_dna_vol': 2}],
+         '_evidence': {'project_title': 'Example eDNA survey of two upland lakes for automated testing',
+                       'filter_diameter': 'vacuum filtered within 24 hours using 47 mm diameter',
+                       'project_contact': 'contact Jane at nobody@example.org',
+                       'sequencing_location': 'prior to DNA extraction and sequencing at UKCEH Wallingford',
+                       'COI.pcr_dna_vol': 'prior to the addition of 2 µL of template DNA'}}
+
+
+class FakeOllama(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers['Content-Length']))
+        body = json.dumps({'message': {'content': json.dumps(reply)}}).encode()
+        self.send_response(200); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    def log_message(self, *a): pass
+
+
+srv = HTTPServer(('127.0.0.1', 0), FakeOllama)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+m3 = server.parse_report_regex(text)
+server.local_ai_opinion(m3, text, 'fake', f'http://127.0.0.1:{srv.server_address[1]}')
+srv.shutdown()
+r3 = {it['id']: it for it in server.review(m3, template)}
+check(r3['project:sequencing_location']['value'] == 'UKCEH Wallingford' and r3['project:sequencing_location']['status'] == 'check',
+      'local AI fills a gap, marked for checking')
+check(r3['sample:filter_diameter']['status'] == 'ok' and 'agrees' in ' '.join(r3['sample:filter_diameter']['reasons']),
+      'agreement with the local AI is recorded')
+check(not r3['project:project_contact']['value'], 'a local-AI value without a real quote from the report is discarded')
+try:
+    server.parse_with_ollama(text, 'x', 'http://example.org:11434'); check(False, 'refuses to send reports to another computer')
+except RuntimeError:
+    check(True, 'refuses to send reports to another computer')
+
 print()
 if failures:
     print(f'{len(failures)} check(s) failed.')

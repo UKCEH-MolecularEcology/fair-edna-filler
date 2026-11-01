@@ -6,20 +6,25 @@ FAIRe Metadata Filler – fills the FAIRe eDNA metadata template from project re
     python3 server.py report.pdf              # fill the template from one report  -> outputs/
     python3 server.py uploads/                # every report in a folder           -> outputs/
     python3 server.py report.doc -t my_template.xlsx -o results/
+    python3 server.py report.doc --edits outputs/report_review.csv --save-profile lab.json   # reuse your corrections
+    python3 server.py uploads/ --profile lab.json --local-ai    # + second opinion from a local model (Ollama)
 
-Each workbook comes with <name>_review.csv: every value and the report sentence it came from.
+Each workbook comes with <name>_review.csv: values that need a look first, then everything accepted automatically,
+each with the report sentence it came from. Put corrections in its 'your_value' column and rerun with --edits.
 Reports are read on this computer only.
 
 The same functions are used by index.html (in the browser, via Pyodide) and the Colab notebook:
     extract_report_text(path) -> str
     parse_report_regex(text)  -> metadata dict
-    review_items(meta)        -> values + source sentences;  apply_review(meta, edits)
+    apply_library(meta)       -> primers/databases checked against published ones
+    review(meta, template)    -> every value with its source sentence and a status: ok / check / missing
+    apply_review(meta, edits); profile_from_review(...); apply_profile(meta, profile)
     fill_workbook(template, metadata, report_name, output) -> summary dict
 Optional, only for non-confidential reports: parse_with_claude(text, key) -> facts_from_claude(data, text)
 """
 from __future__ import annotations
 
-import html, json, os, re, shutil, struct, subprocess, tempfile, time, zipfile
+import html, json, os, posixpath, re, shutil, struct, subprocess, tempfile, time, zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -927,15 +932,28 @@ def extract(text: str) -> dict:
     fsents = [x.replace('\u2212', '-').replace('μ', 'µ') for x in (sentences(mtext) if mtext else sents)]
     one_assay = list(assays)[0] if len(assays) == 1 else None
 
+    meta['_methods'] = fl if mtext else None
+    conflicts = meta.setdefault('_conflicts', {})
+
+    def differs(a, b):
+        tok = lambda v: set(re.findall(r'[a-z0-9]+(?:\.[0-9]+)*', re.sub(r'\b(?:v|version)\.?\s*(?=\d)', '', str(v).lower()))) - \
+            {'the', 'a', 'of', 'and', 'kit', 'chemistry', 'reagent', 'database'}
+        x, y = tok(a), tok(b)
+        return bool(x and y) and not (x <= y or y <= x)
+
     def put(key, value, src):
-        if value not in (None, '') and not meta.get(key):
-            meta[key] = value; cite(key, src)
+        if value in (None, ''): return
+        if not meta.get(key): meta[key] = value; cite(key, src)
+        elif isinstance(meta[key], str) and differs(meta[key], value):
+            conflicts.setdefault(key, []).append(str(value))
 
     def put_a(mk, key, value, src, override=False):
         a = assays.get(mk)
         if a is None or value in (None, ''): return
         if override or not a.get(key):
             a[key] = value; evidence.pop(f'{mk}.{key}', None); cite(f'{mk}.{key}', src)
+        elif isinstance(a[key], str) and differs(a[key], value):
+            conflicts.setdefault(f'{mk}.{key}', []).append(str(value))
 
     def segments(sentence):
         """'16S … 25 cycles … 18S … 35 cycles' -> [('16S', '16S … 25 cycles …'), ('18S', '18S … 35 cycles')]."""
@@ -1147,7 +1165,7 @@ def extract(text: str) -> dict:
     for s in fsents:
         if not re.search(r'extract', s, re.I): continue
         km = re.search(r"((?:[A-Z][\w®™'\-/&.]*\s){0,6}?(?:[Bb]lood (?:and|&) [Tt]issue |PowerSoil |PowerWater |Soil |Plant )?(?:Mini |Maxi |Pro |Plus )?[Kk]it)(\s*\([^)]{2,60}\))?", s)
-        if km and len(km.group(1)) > 8:
+        if km and len(km.group(1)) > 8 and not re.search(r'Assay Kit|Qubit|Quant|PicoGreen|library|clean-?up|purification|Index', km.group(0), re.I):
             put('ext_kit', norm(km.group(1) + (km.group(2) or '')), s); break
     if not meta.get('ext_sep'):
         kitname = meta.get('ext_kit') or ''
@@ -1394,7 +1412,7 @@ def project_values(meta: dict, version: str) -> dict:
         'neg_cont_0_1': '1' if meta.get('neg_controls') else '0', 'pos_cont_0_1': '1' if meta.get('pos_controls') else '0',
         'checkls_ver': version, 'mod_date': time.strftime('%Y-%m-%d'),
         'license': meta.get('license'), 'rightsHolder': meta.get('institution'), 'accessRights': meta.get('access_rights'),
-        'bibliographicCitation': meta.get('bibliographicCitation'), 'code_repo': meta.get('code_repo'),
+        'bibliographicCitation': meta.get('bibliographicCitation') if re.search(r'10\.\d{4,}/|https?://', str(meta.get('bibliographicCitation') or '')) else None, 'code_repo': meta.get('code_repo'),
         'biological_rep': meta.get('biological_rep'), 'pcr_0_1': '1',
         'pcr_method_additional': '; '.join(n for n in notes if 'normalised' in n) or None,
         'barcoding_pcr_appr': meta.get('barcoding_pcr_appr'),
@@ -1614,6 +1632,8 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     ss = shared_strings(pkg)
     paths = sheet_paths(pkg)
     VOCAB.clear(); VOCAB.update(load_vocab(pkg, paths, ss))
+    info = {'vocab': VOCAB, 'types': template_info(template_path).get('types', {})}
+    issues = {'fixed': {}, 'problems': {}}
     ver = re.search(r'checklist_v([\d.]+\d)', ' '.join(ss))
     version = ver.group(1) if ver else '1.0'
 
@@ -1621,6 +1641,7 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     p = paths['projectMetadata']; xml = pkg[p].decode('utf-8')
     rows = parse_rows(xml)
     filled = fill_project(rows, ss, meta, version)
+    validate_rows('projectMetadata', rows, ss, info, issues)
     pkg[p] = replace_sheet_data(xml, rows).encode('utf-8')
 
     # sampleMetadata
@@ -1631,6 +1652,8 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     samples = build_samples(meta)
     for i, (rec, _, control) in enumerate(samples):
         write_record(rows, 4 + i, rec, hdr, req, control)
+    validate_rows('sampleMetadata', rows, ss, info, issues)
+    sample_rows = rows
     pkg[p] = replace_sheet_data(xml, rows).encode('utf-8')
 
     # experimentRunMetadata
@@ -1652,6 +1675,8 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
             }, hdr, req)
             rn += 1
     n_runs = rn - 4
+    validate_rows('experimentRunMetadata', rows, ss, info, issues)
+    check_links(sample_rows, rows, ss, issues)
     pkg[p] = replace_sheet_data(xml, rows).encode('utf-8')
 
     # README notes
@@ -1677,7 +1702,7 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
         'institution': meta.get('institution'), 'lakes': len(meta.get('sites') or []),
         'rounds': len(meta.get('rounds') or []), 'assays': [a['assay_name'] for a in meta.get('assays') or []],
         'sampleRows': len(samples), 'experimentRows': n_runs, 'projectTermsFilled': filled,
-        'notes': meta.get('notes') or [],
+        'notes': meta.get('notes') or [], 'validation': summarise_issues(issues),
     }
 
 
@@ -1742,7 +1767,7 @@ EVIDENCE_KEY = {
     'chimera_check_method': 'chimera_check_method', 'chimera_check_param': 'chimera_check_param',
     'otu_clust_tool': 'otu_clust_tool', 'otu_clust_cutoff': 'otu_clust_cutoff', 'otu_raw_description': 'otu_raw_description',
     'bioinfo_method_additional': 'bioinfo_method_additional', 'nucl_acid_amp': 'nucl_acid_amp',
-    'seq_method_additional': 'seq_method_additional', 'filter_name': 'filter_name', 'samp_store_temp': 'samp_store_temp',
+    'seq_method_additional': 'phix_perc', 'filter_name': 'filter_name', 'samp_store_temp': 'samp_store_temp',
     'samp_store_sol': 'samp_store_sol', 'tax_class_id_cutoff': 'tax_class_id_cutoff', 'tax_class_query_cutoff': 'tax_class_query_cutoff',
     'min_reads_cutoff': 'min_reads_cutoff', 'min_reads_cutoff_unit': 'min_reads_cutoff_unit',
 }
@@ -1757,7 +1782,7 @@ def _evidence_for(meta, term, value, assay=None):
     if value in (None, '') or str(value).startswith(('missing:', 'not applicable')): return None
     ev = meta.get('_evidence') or {}
     if assay is not None:
-        key = ASSAY_EVIDENCE_KEY.get(term, term)
+        key = ASSAY_EVIDENCE_KEY.get(term) or ASSAY_KEY.get(term, term)
         return ev.get(f"{assay['marker']}.{key}") or (ev.get(EVIDENCE_KEY[term]) if term in EVIDENCE_KEY else None)
     return ev.get(EVIDENCE_KEY.get(term, term))
 
@@ -1784,7 +1809,7 @@ def review_items(meta: dict, text: str = '') -> list:
         for term in sorted(ASSAY_TERMS, key=lambda t: [x for _, ts in SECTIONS for x in ts].index(t) if any(t in ts for _, ts in SECTIONS) else 999):
             value = ov.get('assay', {}).get(str(i), {}).get(term, assay_value(a, term, meta))
             items.append({'id': f'assay:{i}:{term}', 'section': _section_of(term), 'term': term, 'scope': 'assay',
-                          'assay': a.get('assay_name'), 'value': '' if value is None else str(value),
+                          'assay': a.get('assay_name'), 'marker': a.get('marker'), 'value': '' if value is None else str(value),
                           'generated': term in GENERATED,
                           'evidence': _evidence_for(meta, term, value, a)})
     samples = build_samples(meta)
@@ -1812,7 +1837,484 @@ def apply_review(meta: dict, edits: dict) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  4. Claude-assisted extraction (same schema as the rule-based extractor)
+#  4. Automatic checks: primer library, validation, confidence, profiles, second opinions
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── primer & reference-database library ──────────────────────────────────────
+# Published primers commonly used for eDNA metabarcoding. Used to (a) name and cite a
+# primer whose sequence is printed in the report, (b) fill the sequence of a primer that
+# is only named (flagged for checking), (c) flag sequences that differ from the published one.
+# To add one: append (names, marker, direction, sequence 5'-3', reference).
+PRIMER_LIBRARY = [
+    (['MiFish-U-F', 'MiFish-UF', 'MiFishU-F'], '12S', 'fwd', 'GTCGGTAAAACTCGTGCCAGC', 'https://doi.org/10.1098/rsos.150088'),
+    (['MiFish-U-R', 'MiFish-UR', 'MiFishU-R'], '12S', 'rev', 'CATAGTGGGGTATCTAATCCCAGTTTG', 'https://doi.org/10.1098/rsos.150088'),
+    (['MiFish-E-F', 'MiFish-EF'], '12S', 'fwd', 'GTTGGTAAATCTCGTGCCAGC', 'https://doi.org/10.1098/rsos.150088'),
+    (['MiFish-E-R', 'MiFish-ER'], '12S', 'rev', 'CATAGTGGGGTATCTAATCCTAGTTTG', 'https://doi.org/10.1098/rsos.150088'),
+    (['12S-V5-F', '12SV5F', '12S-V5F', '12SV5-F'], '12S', 'fwd', 'ACTGGGATTAGATACCCC', 'https://doi.org/10.1093/nar/gkr732'),
+    (['12S-V5-R', '12SV5R', '12S-V5R', '12SV5-R'], '12S', 'rev', 'TAGAACAGGCTCCTCTAG', 'https://doi.org/10.1093/nar/gkr732'),
+    (['teleo_F', 'teleo-F', 'Tele02-F', 'Tele02F'], '12S', 'fwd', 'ACACCGCCCGTCACTCT', 'https://doi.org/10.1111/mec.13428'),
+    (['teleo_R', 'teleo-R', 'Tele02-R', 'Tele02R'], '12S', 'rev', 'CTTCCGGTACACTTACCATG', 'https://doi.org/10.1111/mec.13428'),
+    (['mlCOIintF'], 'COI', 'fwd', 'GGWACWGGWTGAACWGTWTAYCCYCC', 'https://doi.org/10.1186/1742-9994-10-34'),
+    (['mlCOIintF-XT'], 'COI', 'fwd', 'GGWACWRGWTGRACWITITAYCCYCC', 'https://doi.org/10.7717/peerj.4705'),
+    (['jgHCO2198', 'jgHCO'], 'COI', 'rev', 'TAIACYTCIGGRTGICCRAARAAYCA', 'https://doi.org/10.1111/1755-0998.12138'),
+    (['LCO1490'], 'COI', 'fwd', 'GGTCAACAAATCATAAAGATATTGG', 'https://pubmed.ncbi.nlm.nih.gov/7881515/'),
+    (['HCO2198'], 'COI', 'rev', 'TAAACTTCAGGGTGACCAAAAAATCA', 'https://pubmed.ncbi.nlm.nih.gov/7881515/'),
+    (['fwhF2'], 'COI', 'fwd', 'GGDACWGGWTGAACWGTWTAYCCHCC', 'https://doi.org/10.3897/mbmg.1.14625'),
+    (['fwhR2n'], 'COI', 'rev', 'GTRATWGCHCCDGCTARWACWGG', 'https://doi.org/10.3897/mbmg.1.14625'),
+    (['BF3'], 'COI', 'fwd', 'CCHGAYATRGCHTTYCCHCG', 'https://doi.org/10.3389/fenvs.2017.00011'),
+    (['BR2'], 'COI', 'rev', 'TCDGGRTGNCCRAARAAYCA', 'https://doi.org/10.3389/fenvs.2017.00011'),
+    (['515F-Y', '515FY', '515F', '515f', '515F (Parada)'], '16S', 'fwd', 'GTGYCAGCMGCCGCGGTAA', 'https://doi.org/10.1111/1462-2920.13023'),
+    (['926R', '926r'], '16S', 'rev', 'CCGYCAATTYMTTTRAGTTT', 'https://doi.org/10.1111/1462-2920.13023'),
+    (['806RB', '806R (Apprill)'], '16S', 'rev', 'GGACTACNVGGGTWTCTAAT', 'https://doi.org/10.3354/ame01753'),
+    (['515F (Caporaso)'], '16S', 'fwd', 'GTGCCAGCMGCCGCGGTAA', 'https://doi.org/10.1073/pnas.1000080107'),
+    (['806R', '806R (Caporaso)'], '16S', 'rev', 'GGACTACHVGGGTWTCTAAT', 'https://doi.org/10.1073/pnas.1000080107'),
+    (['341F', 'S-D-Bact-0341-b-S-17'], '16S', 'fwd', 'CCTACGGGNGGCWGCAG', 'https://doi.org/10.1093/nar/gks808'),
+    (['785R', '805R', 'S-D-Bact-0785-a-A-21'], '16S', 'rev', 'GACTACHVGGGTATCTAATCC', 'https://doi.org/10.1093/nar/gks808'),
+    (['1391f', '1391F', '1391_F'], '18S', 'fwd', 'GTACACACCGCCCGTC', 'https://doi.org/10.1371/journal.pone.0006372'),
+    (['EukBr', 'EukB', 'EukBR'], '18S', 'rev', 'TGATCCTTCTGCAGGTTCACCTAC', 'https://doi.org/10.1371/journal.pone.0006372'),
+    (['TAReuk454FWD1', 'TAReukFWD1'], '18S', 'fwd', 'CCAGCASCYGCGGTAATTCC', 'https://doi.org/10.1111/j.1365-294X.2009.04480.x'),
+    (['TAReukREV3'], '18S', 'rev', 'ACTTTCGTTCTTGATYRA', 'https://doi.org/10.1111/j.1365-294X.2009.04480.x'),
+    (['Diat_rbcL_708F_1', 'Diat_rbcL_708F'], 'rbcL', 'fwd', 'AGGTGAAGTAAAAGGTTCWTACTTAAA', 'https://doi.org/10.1016/j.ecolind.2017.06.024'),
+    (['R3_1', 'Diat_rbcL_R3_1'], 'rbcL', 'rev', 'CCTTCTAATTTACCWACWACTG', 'https://doi.org/10.1016/j.ecolind.2017.06.024'),
+    (['ITS1F', 'ITS1-F'], 'ITS', 'fwd', 'CTTGGTCATTTAGAGGAAGTAA', 'https://doi.org/10.1111/j.1365-294X.1993.tb00005.x'),
+    (['ITS2'], 'ITS', 'rev', 'GCTGCGTTCTTCATCGATGC', None),
+    (['ITS3'], 'ITS', 'fwd', 'GCATCGATGAAGAACGCAGC', None),
+    (['ITS4'], 'ITS', 'rev', 'TCCTCCGCTTATTGATATGC', None),
+    (['fITS7'], 'ITS', 'fwd', 'GTGARTCATCGAATCTTTG', 'https://doi.org/10.1111/j.1574-6941.2012.01437.x'),
+    (['gITS7'], 'ITS', 'fwd', 'GTGARTCATCGARTCTTTG', 'https://doi.org/10.1111/j.1574-6941.2012.01437.x'),
+    (['trnL-g', 'g', 'trnL g'], 'trnL', 'fwd', 'GGGCAATCCTGAGCCAA', 'https://doi.org/10.1093/nar/gkl938'),
+    (['trnL-h', 'h', 'trnL h'], 'trnL', 'rev', 'CCATTGAGTCTCTGCACCTATC', 'https://doi.org/10.1093/nar/gkl938'),
+]
+REFERENCE_DBS = [  # (canonical name, pattern)
+    ('SILVA', r'\bSILVA\b'), ('PR2', r'\bPR2\b|Protist Ribosomal Reference'), ('MIDORI2', r'MIDORI'),
+    ('BOLD', r'\bBOLD\b|Barcode of Life Data'), ('NCBI GenBank', r'\bNCBI\b|GenBank|\bnt database'),
+    ('UNITE', r'\bUNITE\b'), ('Diat.barcode', r'diat\.?barcode|R-Syst'), ('MitoFish', r'MitoFish'),
+    ('RDP', r'\bRDP\b'), ('Greengenes', r'Greengenes'), ('GTDB', r'\bGTDB\b'), ('CRUX', r'\bCRUX\b'),
+    ('MARES', r'\bMARES\b'), ('PhytoREF', r'PhytoREF'), ('EMBL', r'\bEMBL\b'), ('custom reference database', r'custom|in-house|curated local'),
+]
+IUPAC_SET = set('ACGTRYKMSWBDHVNI')
+
+
+def _seq_key(s):
+    return re.sub(r'[^ACGTRYKMSWBDHVN]', '', str(s or '').upper().replace('I', 'N'))
+
+
+def _name_key(s):
+    return re.sub(r'[^a-z0-9]', '', str(s or '').lower())
+
+
+def primer_by_seq(seq):
+    k = _seq_key(seq)
+    if len(k) < 14: return None
+    for e in PRIMER_LIBRARY:
+        lk = _seq_key(e[3])
+        if k == lk or (len(k) >= 15 and len(lk) >= 15 and (k.endswith(lk) or lk.endswith(k))): return e
+    return None
+
+
+def primer_by_name(name):
+    k = _name_key(name)
+    if len(k) < 3: return None          # single letters ('g', 'h') only match by sequence
+    for e in PRIMER_LIBRARY:
+        if any(_name_key(n) == k for n in e[0]): return e
+    return None
+
+
+def _flag(meta, item_id, level, reason, origin=None, evidence=None):
+    a = meta.setdefault('_auto', {}).setdefault(item_id, {'level': 'ok', 'reasons': []})
+    if level == 'check': a['level'] = 'check'
+    if reason and reason not in a['reasons']: a['reasons'].append(reason)
+    if origin: a['origin'] = origin
+    if evidence: a['evidence'] = evidence
+
+
+def apply_library(meta: dict) -> dict:
+    """Cross-check primers against the library; fill names, references and (flagged) sequences."""
+    for i, a in enumerate(meta.get('assays') or []):
+        mk = a.get('marker')
+        for d, word in (('fwd', 'forward'), ('rev', 'reverse')):
+            sid, nid, rid = (f'assay:{i}:pcr_primer_{word}', f'assay:{i}:pcr_primer_name_{word}',
+                             f'assay:{i}:pcr_primer_reference_{word}')
+            seq, name, ref = a.get(f'primer_{d}'), a.get(f'primer_name_{d}'), a.get(f'primer_ref_{d}')
+            e = primer_by_seq(seq) if seq else None
+            if e:
+                label = f'{e[0][0]} ({e[4] or "published primer"})'
+                _flag(meta, sid, 'ok', f'matches the published primer {label}')
+                if e[1] != mk: _flag(meta, sid, 'check', f'the primer library lists {e[0][0]} as a {e[1]} primer, not {mk}')
+                if e[2] != d: _flag(meta, sid, 'check', f'{e[0][0]} is published as a {"forward" if e[2] == "fwd" else "reverse"} primer – '
+                                                         'check the direction')
+                if not name and e[2] == d:
+                    a[f'primer_name_{d}'] = e[0][0]
+                    _flag(meta, nid, 'ok', 'named from the primer library (sequence matches exactly)', origin='primer library')
+                elif _name_key(name) in {_name_key(n) for n in e[0]}:
+                    _flag(meta, nid, 'ok', f'name and sequence agree with the published {e[0][0]}')
+                if not ref and e[4]:
+                    a[f'primer_ref_{d}'] = e[4]
+                    _flag(meta, rid, 'ok', 'reference taken from the primer library', origin='primer library')
+                continue
+            e = primer_by_name(name) if name else None
+            if not e: continue
+            if seq:
+                _flag(meta, sid, 'check', f'differs from the published {e[0][0]} sequence ({e[3]}) – check for a typo or a modified primer')
+            else:
+                a[f'primer_{d}'] = e[3]
+                _flag(meta, sid, 'check', f'the report names {name} but does not print the sequence; filled from the primer library',
+                      origin='primer library')
+                if not ref and e[4]:
+                    a[f'primer_ref_{d}'] = e[4]
+                    _flag(meta, rid, 'ok', 'reference taken from the primer library', origin='primer library')
+            if e[1] != mk: _flag(meta, nid, 'check', f'{e[0][0]} is a {e[1]} primer in the library, but this assay is {mk}')
+        db = a.get('otu_db')
+        if db:
+            known = [n for n, p in REFERENCE_DBS if re.search(p, str(db), re.I)]
+            if known: _flag(meta, f'assay:{i}:otu_db', 'ok', 'recognised reference database: ' + ', '.join(known))
+    return meta
+
+
+# ── template-driven field types and validation ───────────────────────────────
+
+_INFO_CACHE: dict = {}
+
+
+def template_info(path=None) -> dict:
+    """{'vocab': {term: (type, options)}, 'types': {term: field type}, 'req': {term: M/HR/R/O}} from a FAIRe template."""
+    path = path or (TEMPLATE_PATH if 'TEMPLATE_PATH' in globals() else None)
+    try:
+        key = (str(path), Path(path).stat().st_mtime)
+    except Exception:
+        return {'vocab': {}, 'types': {}, 'req': {}}
+    if key in _INFO_CACHE: return _INFO_CACHE[key]
+    with zipfile.ZipFile(path) as z:
+        pkg = {n: z.read(n) for n in z.namelist()}
+    ss = shared_strings(pkg); paths = sheet_paths(pkg)
+    types, req = {}, {}
+    for name in ('projectMetadata', 'sampleMetadata', 'experimentRunMetadata'):
+        sp = paths.get(name)
+        if not sp: continue
+        rows = parse_rows(pkg[sp].decode('utf-8'))
+        if name == 'projectMetadata':
+            for rn, r in rows.items():
+                t = cell_text(r['cells'].get('C', ''), ss)
+                if t and rn > 1: req.setdefault(t, cell_text(r['cells'].get('A', ''), ss))
+        else:
+            hdr = {c: cell_text(x, ss) for c, x in rows.get(3, {}).get('cells', {}).items()}
+            for c, x in rows.get(1, {}).get('cells', {}).items():
+                if hdr.get(c): req.setdefault(hdr[c], cell_text(x, ss))
+        rels = pkg.get(posixpath.join(posixpath.dirname(sp), '_rels', posixpath.basename(sp) + '.rels'), b'').decode('utf-8')
+        m = re.search(r'Target="([^"]*comments[^"]*)"', rels)
+        cp = posixpath.normpath(posixpath.join(posixpath.dirname(sp), m.group(1))) if m else None
+        if not cp or cp not in pkg: continue
+        for ref, body in re.findall(r'<comment ref="([A-Z]+\d+)"[^>]*>(.*?)</comment>', pkg[cp].decode('utf-8'), re.S):
+            ft = re.search(r'Field type\s*:\s*([^\n<]+)', html.unescape(re.sub(r'<[^>]+>', '', body)))
+            col, rn = re.match(r'([A-Z]+)(\d+)', ref).groups()
+            term = cell_text(rows.get(int(rn), {}).get('cells', {}).get(col, ''), ss)
+            if ft and term: types.setdefault(term, ft.group(1).strip())
+    info = {'vocab': load_vocab(pkg, paths, ss), 'types': types, 'req': req}
+    _INFO_CACHE.clear(); _INFO_CACHE[key] = info
+    return info
+
+
+ISO_DUR = re.compile(r'P(?!$)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?')
+ISO_DATE = r'\d{4}(?:-\d{2}(?:-\d{2}(?:T\d{2}(?::\d{2}(?::\d{2})?)?(?:Z|[+-]\d{2}:?\d{2})?)?)?)?'
+UNIT_SUFFIX = r'\s*(?:µ[lL]|u[lL]|[mn][lL]|L|°\s*C|ºC|C|mm|cm|µm|um|nm|%|x|×|bp|cycles?|reads|ng(?:/µ?[lL])?|µM|uM|nM|rpm|g|s|min)?\s*'
+
+
+def _num(v):
+    m = re.fullmatch(r'\s*~?\s*(-?\d+(?:[.,]\d+)?)' + UNIT_SUFFIX, str(v))
+    return m.group(1).replace(',', '.') if m else None
+
+
+def check_value(ftype, value, options=None):
+    """-> (value to write, problem or None). Fixes only unambiguous formatting."""
+    v = str(value).strip()
+    if not v or v in MISSING_TERMS or v.startswith(('missing:', 'not applicable')): return v, None
+    ft = (ftype or '').lower()
+    if ft in ('numeric', 'integer'):
+        if ' | ' in v:  # one value per assay/list
+            parts = [check_value(ftype, p)[0] for p in v.split(' | ')]
+            return ' | '.join(parts), None if all(_num(p) for p in parts) else f'should be a number'
+        n = _num(v)
+        if n is None: return v, 'should be a number'
+        if ft == 'integer':
+            if float(n) != int(float(n)): return v, 'should be a whole number'
+            n = str(int(float(n)))
+        return n, None
+    if ft == 'boolean':
+        b = {'1': '1', '0': '0', 'yes': '1', 'true': '1', 'no': '0', 'false': '0'}.get(v.lower())
+        return (b, None) if b else (v, 'should be 0 or 1')
+    if 'yyyy-mm-dd' in ft:
+        if re.fullmatch(ISO_DATE + r'(?:/' + ISO_DATE + r')?', v): return v, None
+        m = re.fullmatch(r'(\d{1,2})[/.](\d{1,2})[/.](\d{4})', v)
+        if m and int(m.group(1)) > 12:   # day first, unambiguous
+            return f'{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}', None
+        return v, 'should be a date like 2025-07-14'
+    if 'pnynmnwndtnhnmns' in ft:
+        if ISO_DUR.fullmatch(v): return v, None
+        m = re.fullmatch(r'(\d+)\s*(h|hrs?|hours?|d|days?|min|minutes?|w|weeks?|months?|y|years?)', v, re.I)
+        if m:
+            n, u = m.group(1), m.group(2).lower()
+            code = 'PT{}M' if u.startswith('min') else 'P{}M' if u.startswith('mo') else \
+                   {'h': 'PT{}H', 'd': 'P{}D', 'w': 'P{}W', 'y': 'P{}Y'}[u[0]]
+            return code.format(n), None
+        return v, 'should be an ISO 8601 duration like PT24H'
+    if 'termlabel [termid]' in ft:
+        return (v, None) if re.fullmatch(r'.+ \[[A-Za-z_]+:[\w.]+\](?:\s*\|\s*.+ \[[A-Za-z_]+:[\w.]+\])*', v) else \
+               (v, 'should be an ontology term like "lake [ENVO:00000020]"')
+    if ft == 'doi':
+        return (v, None) if re.search(r'10\.\d{4,}/|https?://', v) else (v, 'should be a DOI or link')
+    if ft.startswith('controlled vocabulary') or options:
+        opts = options or [o.strip() for o in re.sub(r'^controlled vocabulary\s*\(|\)$', '', ftype or '').split('|') if o.strip()]
+        if v.startswith('other:') or not opts: return v, None
+        low = {o.lower(): o for o in opts}
+        if v in opts: return v, None
+        if v.lower() in low: return low[v.lower()], None
+        return v, 'not one of the FAIRe options'
+    return v, None
+
+
+def validate_rows(sheet, rows, ss, info, issues):
+    """Check (and safely fix) every value in a filled sheet. Adds to issues {'fixed': {...}, 'problems': {...}}."""
+    types, vocab = info.get('types', {}), info.get('vocab', {})
+    if sheet == 'projectMetadata':
+        cells = []
+        for rn, r in rows.items():
+            if rn < 2: continue
+            term = cell_text(r['cells'].get('C', ''), ss); req = cell_text(r['cells'].get('A', ''), ss)
+            vals = [(c, x) for c, x in r['cells'].items() if col_num(c) >= 4]
+            if term and req == 'M' and not any(cell_text(x, ss) for _, x in vals):
+                issues['problems'].setdefault((sheet, term, 'mandatory but empty'), []).append(f'C{rn}')
+            cells += [(term, c, rn) for c, _ in vals]
+    else:
+        hdr = {c: cell_text(x, ss) for c, x in rows.get(3, {}).get('cells', {}).items()}
+        cells = [(hdr.get(c), c, rn) for rn, r in rows.items() if rn > 3 for c in r['cells']]
+    for term, col, rn in cells:
+        if not term or term in ('checkls_ver',): continue
+        x = rows[rn]['cells'][col]
+        v = cell_text(x, ss)
+        if not v: continue
+        fixed, problem = check_value(types.get(term), v, (vocab.get(term) or (None, None))[1])
+        if fixed != v and not problem:
+            style = re.search(r'\bs="(\d+)"', x)
+            rows[rn]['cells'][col] = cell_xml(f'{col}{rn}', fixed, style.group(1) if style else None)
+            issues['fixed'].setdefault((sheet, term, f'"{v}" → "{fixed}"'), []).append(f'{col}{rn}')
+        elif problem:
+            issues['problems'].setdefault((sheet, term, problem), []).append(f'{col}{rn}')
+
+
+def check_links(sample_rows, run_rows, ss, issues):
+    def col_of(rows, name):
+        return next((c for c, x in rows.get(3, {}).get('cells', {}).items() if cell_text(x, ss) == name), None)
+    sc, rc, lc = col_of(sample_rows, 'samp_name'), col_of(run_rows, 'samp_name'), col_of(run_rows, 'lib_id')
+    names = [cell_text(r['cells'].get(sc, ''), ss) for rn, r in sample_rows.items() if rn > 3] if sc else []
+    if len(names) != len(set(names)):
+        issues['problems'][('sampleMetadata', 'samp_name', 'duplicate sample names')] = sorted({n for n in names if names.count(n) > 1})[:5]
+    if rc:
+        orphans = sorted({cell_text(r['cells'].get(rc, ''), ss) for rn, r in run_rows.items() if rn > 3} - set(names) - {''})
+        if orphans: issues['problems'][('experimentRunMetadata', 'samp_name', 'not found in sampleMetadata')] = orphans[:5]
+    if lc:
+        libs = [cell_text(r['cells'].get(lc, ''), ss) for rn, r in run_rows.items() if rn > 3]
+        if len(libs) != len(set(libs)):
+            issues['problems'][('experimentRunMetadata', 'lib_id', 'duplicate library IDs')] = sorted({n for n in libs if libs.count(n) > 1})[:5]
+
+
+def summarise_issues(issues) -> dict:
+    out = {}
+    for kind in ('fixed', 'problems'):
+        out[kind] = [{'sheet': s, 'term': t, 'what': w, 'cells': len(cells), 'where': ', '.join(map(str, cells[:4])) +
+                      ('…' if len(cells) > 4 else '')} for (s, t, w), cells in issues[kind].items()]
+    return out
+
+
+# ── confidence: which values need a human look ───────────────────────────────
+
+RANGES = {'annealingTemp': (35, 75), 'pcr_cycles': (10, 60), 'amplificationReactionVolume': (2, 200), 'pcr_dna_vol': (0.1, 20),
+          'pcr_rep': (1, 24), 'size_frac': (0.05, 50), 'filter_diameter': (5, 300), 'otu_clust_cutoff': (80, 100),
+          'biological_rep': (1, 100), 'phix_perc': (0, 50), 'pcr_primer_vol_forward': (0.05, 20), 'pcr_primer_vol_reverse': (0.05, 20),
+          'pcr_primer_conc_forward': (0.01, 100), 'pcr_primer_conc_reverse': (0.01, 100), 'tax_class_id_cutoff': (50, 100),
+          'tax_class_query_cutoff': (20, 100), 'prepped_samp_store_temp': (-200, 40), 'samp_store_temp': (-200, 40),
+          'ampliconSize': (30, 2000), 'min_len_cutoff': (20, 1000), 'pcr2_amplificationReactionVolume': (2, 200),
+          'pcr2_dna_vol': (0.1, 20), 'samp_size': (0.001, 1e6)}
+METHOD_TERMS = set(RANGES) | {'pcr_primer_forward', 'pcr_primer_reverse', 'pcr_primer_name_forward', 'pcr_primer_name_reverse',
+                                 'commercial_mm', 'custom_mm', 'pcr_cond', 'seq_kit', 'instrument', 'otu_db', 'trim_method',
+                                 'merge_tool', 'otu_clust_tool', 'nucl_acid_ext_kit', 'filter_name', 'filter_material'}
+TERM_KEY = dict(EVIDENCE_KEY, **{t: ASSAY_KEY.get(t, t) for t in ASSAY_TERMS})
+
+
+def _flatten(s):
+    return re.sub(r'\s+', ' ', str(s or '').replace('−', '-').replace('μ', 'µ')).strip()
+
+
+def _tokens(v):
+    v = re.sub(r'\b(?:v|ver|version)\.?\s*(?=\d)', '', str(v).lower().replace('µ', 'u'))
+    return set(re.findall(r'[a-z0-9]+(?:\.[0-9]+)*', v)) - {'the', 'a', 'an', 'of', 'and', 'kit', 'chemistry', 'reagent', 'database'}
+
+
+def same_value(a, b) -> bool:
+    if str(a).strip().lower() == str(b).strip().lower(): return True
+    try: return abs(float(_num(a) or 'x') - float(_num(b) or 'x')) < 1e-6
+    except ValueError: pass
+    x, y = _tokens(a), _tokens(b)
+    return bool(x and y) and (x <= y or y <= x)
+
+
+def assess(meta: dict, items: list, info: dict | None = None) -> list:
+    """Give every review item a status: 'ok' (accepted automatically), 'check' (needs a look) or 'missing'."""
+    info = info or {}
+    types, vocab, req = info.get('types', {}), info.get('vocab', {}), info.get('req', {})
+    auto, conflicts = meta.get('_auto') or {}, meta.get('_conflicts') or {}
+    methods = _flatten(meta.get('_methods')) if meta.get('_methods') else None
+    for it in items:
+        v, term = it['value'], it['term']
+        a = auto.get(it['id']) or {}
+        it['required'] = req.get(term, '')
+        it['origin'] = a.get('origin') or ('tool' if it['generated'] else 'report')
+        if not it.get('evidence') and a.get('evidence'): it['evidence'] = a['evidence']
+        if not v or v.startswith(('missing:', 'not applicable')):
+            it['status'] = 'missing'
+            it['reasons'] = a.get('reasons') or ([] if v.startswith('not applicable') else ['not found in the report'])
+            if v.startswith('not applicable'): it['status'] = 'ok'; it['reasons'] = ['not applicable']
+            continue
+        check = list(a.get('reasons', [])) if a.get('level') == 'check' else []
+        good = [] if check else list(a.get('reasons', []))
+        key = TERM_KEY.get(term, term)
+        alt = conflicts.get(f'{it.get("marker")}.{key}' if it['scope'] == 'assay' else key)
+        if alt and not a.get('origin') == 'profile':
+            check.append('the report also gives: ' + '; '.join(dict.fromkeys(alt))[:160])
+        if it['generated']:
+            good.append('set by the tool')
+        elif a.get('origin') in ('profile', 'primer library', 'user'):
+            pass
+        elif not it.get('evidence'):
+            if a.get('origin') != 'user': check.append('no source sentence – the value was inferred')
+        elif methods and term in METHOD_TERMS and _flatten(it['evidence'])[:70] not in methods:
+            check.append('the source sentence is outside the Methods section')
+        else:
+            good.append('found in the Methods' if methods else 'source sentence found')
+        if term in vocab:
+            written = str(normalise(term, v, vocab))
+            if written.startswith('other:') and not v.startswith('other:'):
+                good.append(f'not in the FAIRe list – written as "{written[:60]}"')
+            elif written != v:
+                good.append(f'written as the FAIRe option "{written}"')
+        elif term not in ('checkls_ver',):
+            fixed, problem = check_value(types.get(term), v)
+            if problem: check.append(problem)
+            elif fixed != v: good.append(f'will be written as "{fixed}"')
+        n = _num(v)
+        if term in RANGES and n is not None and not (RANGES[term][0] <= float(n) <= RANGES[term][1]):
+            check.append(f'unusual value for {term} (expected {RANGES[term][0]:g}–{RANGES[term][1]:g})')
+        if term in ('pcr_primer_forward', 'pcr_primer_reverse') and a.get('origin') != 'primer library':
+            s = re.sub(r'\s', '', v.upper())
+            if set(s) - IUPAC_SET or not 14 <= len(s) <= 45: check.append('does not look like a single primer sequence')
+        it['status'] = 'check' if check else 'ok'
+        it['reasons'] = check or good
+    return items
+
+
+def review_summary(items) -> dict:
+    c = {'ok': 0, 'check': 0, 'missing': 0}
+    for it in items:
+        if it['generated'] and it.get('status') == 'ok': continue
+        c[it.get('status', 'ok')] = c.get(it.get('status', 'ok'), 0) + 1
+    c['missing_required'] = sum(1 for it in items if it.get('status') == 'missing' and it.get('required') in ('M', 'HR'))
+    return c
+
+
+# ── profiles: learn from corrections ─────────────────────────────────────────
+
+def _portable_id(item_id, meta):
+    p = item_id.split(':')
+    if p[0] == 'assay':
+        a = (meta.get('assays') or [])[int(p[1])]
+        return f'assay:{a.get("marker")}:{p[2]}'
+    return item_id
+
+
+def _local_id(pid, meta):
+    p = pid.split(':')
+    if p[0] != 'assay': return pid
+    for i, a in enumerate(meta.get('assays') or []):
+        if a.get('marker') == p[1]: return f'assay:{i}:{p[2]}'
+    return None
+
+
+def profile_from_review(meta: dict, edits: dict, name: str = 'my profile', profile: dict | None = None) -> dict:
+    """Turn review edits into a reusable profile: {id: {'from': value the tool found, 'to': your value}}."""
+    profile = dict(profile or {'faire_profile': 1, 'name': name, 'entries': {}})
+    profile['name'] = name or profile.get('name') or 'my profile'
+    profile['updated'] = time.strftime('%Y-%m-%d')
+    entries = dict(profile.get('entries') or {})
+    found = {it['id']: it['value'] for it in review_items(dict(meta, _overrides={}))}
+    for item_id, value in (edits or {}).items():
+        if item_id not in found: continue
+        entries[_portable_id(item_id, meta)] = {'from': found[item_id], 'to': str(value or '').strip()}
+    profile['entries'] = entries
+    return profile
+
+
+def apply_profile(meta: dict, profile: dict) -> dict:
+    """Apply a saved profile: a correction is used when the tool finds the same value as last time (or nothing)."""
+    if not profile: return meta
+    name = profile.get('name') or 'profile'
+    current = {it['id']: it['value'] for it in review_items(meta)}
+    edits = {}
+    for pid, e in (profile.get('entries') or {}).items():
+        lid = _local_id(pid, meta)
+        if not lid or lid not in current: continue
+        cur, frm, to = current[lid], e.get('from') or '', e.get('to') or ''
+        empty = not cur or cur.startswith(('missing:', 'not applicable'))
+        if same_value(cur, to) or (cur == to):
+            _flag(meta, lid, 'ok', f'matches your profile "{name}"', origin='profile')
+        elif empty or cur == frm:
+            edits[lid] = to
+            _flag(meta, lid, 'ok', f'from your profile "{name}"', origin='profile')
+        else:
+            _flag(meta, lid, 'check', f'your profile "{name}" says "{to[:80]}"')
+    apply_review(meta, edits)
+    meta.setdefault('notes', [])
+    return meta
+
+
+# ── second opinion from another reader (local AI or Claude) ──────────────────
+
+def second_opinion(meta: dict, other: dict, label: str) -> dict:
+    """Compare with another reader's (grounded) result: agreement -> accepted, disagreement -> check, gaps -> filled + check."""
+    mine = {it['id']: it for it in review_items(meta)}
+    m_of = {a.get('marker'): i for i, a in enumerate(meta.get('assays') or [])}
+    edits, agree, differ, filled = {}, 0, 0, 0
+    for it in review_items(other):
+        if it['generated']: continue
+        lid = it['id']
+        if it['scope'] == 'assay':
+            mk = (other.get('assays') or [])[int(lid.split(':')[1])].get('marker')
+            if mk not in m_of: continue
+            lid = f'assay:{m_of[mk]}:{it["term"]}'
+        if lid not in mine: continue
+        theirs, ours = it['value'], mine[lid]['value']
+        if not theirs or theirs.startswith(('missing:', 'not applicable')): continue
+        if not ours or ours.startswith('missing:'):
+            edits[lid] = theirs; filled += 1
+            _flag(meta, lid, 'check', f'not found by the built-in reader; found by {label} – please confirm', origin=label,
+                  evidence=it.get('evidence'))
+        elif same_value(ours, theirs):
+            agree += 1; _flag(meta, lid, 'ok', f'{label} agrees')
+        else:
+            differ += 1; _flag(meta, lid, 'check', f'{label} read "{theirs[:80]}"')
+    apply_review(meta, edits)
+    for k in ('sites', 'rounds'):
+        if not meta.get(k) and other.get(k): meta[k] = other[k]
+    meta.setdefault('notes', []).append(f'{label}: agreed on {agree} value(s), disagreed on {differ}, filled {filled} gap(s) (marked for checking).')
+    meta['_method'] = f'{meta.get("_method", "rule-based")} + {label}'
+    return meta
+
+
+def review(meta: dict, template=None) -> list:
+    """review_items + a status for each: what can be accepted automatically and what needs a look."""
+    return assess(meta, review_items(meta), template_info(template))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  5. AI readers (optional): local model via Ollama, or Claude for non-confidential reports (same schema as the rule-based extractor)
 # ════════════════════════════════════════════════════════════════════════════
 
 CLAUDE_MODEL = os.environ.get('FAIRE_CLAUDE_MODEL', 'claude-haiku-5-5')
@@ -1872,6 +2374,39 @@ def parse_with_claude(text: str, api_key: str) -> dict:
                                  messages=[{'role': 'user', 'content': claude_prompt(text)}])
     raw = ''.join(b.text for b in msg.content if getattr(b, 'type', '') == 'text')
     return json_from_reply(raw)
+
+
+LOCAL_MODEL = os.environ.get('FAIRE_LOCAL_MODEL', 'qwen2.5:7b')
+OLLAMA_HOST = os.environ.get('OLLAMA_HOST', 'http://127.0.0.1:11434')
+LOCAL_MAX_CHARS = 40_000
+
+
+def parse_with_ollama(text: str, model: str = None, host: str = None, timeout: int = 900) -> dict:
+    """Ask a model running locally in Ollama (nothing leaves this computer). Reads the Methods section when there is one."""
+    import urllib.request
+    host = (host or OLLAMA_HOST).rstrip('/')
+    if not host.startswith('http'): host = 'http://' + host
+    if not re.match(r'https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$', host):
+        raise RuntimeError(f'Refusing to send the report to {host}: the local AI reader only talks to this computer.')
+    body = methods_text(strip_line_numbers(text)) or text
+    payload = {'model': model or LOCAL_MODEL, 'stream': False, 'format': 'json',
+               'options': {'temperature': 0, 'num_ctx': 16384},
+               'messages': [{'role': 'user', 'content': CLAUDE_PROMPT + body[:LOCAL_MAX_CHARS]}]}
+    req = urllib.request.Request(host + '/api/chat', data=json.dumps(payload).encode('utf-8'),
+                                 headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            reply = json.loads(r.read().decode('utf-8'))
+    except OSError as e:
+        raise RuntimeError(f'Could not reach Ollama at {host} ({e}). Is it running? Install from https://ollama.com, '
+                           f'then: ollama pull {model or LOCAL_MODEL}')
+    return json_from_reply(reply.get('message', {}).get('content', ''))
+
+
+def local_ai_opinion(meta: dict, text: str, model: str = None, host: str = None) -> dict:
+    """Second opinion from a local model: grounded like Claude, then compared value by value."""
+    other = facts_from_claude(parse_with_ollama(text, model, host), text)
+    return second_opinion(meta, other, f'local AI ({model or LOCAL_MODEL})')
 
 
 def json_from_reply(raw: str) -> dict:
@@ -1963,25 +2498,62 @@ def parse_report_regex(text: str) -> dict:
 REPORT_TYPES = ('.doc', '.docx', '.pdf', '.txt')
 
 
-def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=None) -> dict:
-    """Read one report, fill the template, and write <name>_FAIRe.xlsx plus <name>_review.csv
-    (every value with the sentence it came from) into out_dir."""
+def prepare(text: str, profile: dict | None = None, local_ai: str | None = None) -> dict:
+    """Built-in reader + primer library + your profile (+ optional local AI second opinion)."""
+    meta = parse_report_regex(text)
+    apply_library(meta)
+    if profile: apply_profile(meta, profile)
+    if local_ai:
+        try: local_ai_opinion(meta, text, None if local_ai is True else local_ai)
+        except Exception as e: meta['notes'].append(f'Local AI reader not used: {e}')
+    return meta
+
+
+REVIEW_COLUMNS = ['id', 'status', 'section', 'field', 'assay', 'value', 'your_value', 'why', 'source sentence in the report']
+
+
+def write_review_csv(items, path):
     import csv
+    order = {'check': 0, 'missing': 1, 'ok': 2}
+    with open(path, 'w', newline='', encoding='utf-8') as fh:
+        w = csv.writer(fh)
+        w.writerow(REVIEW_COLUMNS)
+        for it in sorted(items, key=lambda x: (order.get(x['status'], 3), 0 if x.get('required') in ('M', 'HR') else 1)):
+            if it['generated'] and it['status'] == 'ok': continue
+            w.writerow([it['id'], {'ok': 'accepted', 'check': 'CHECK', 'missing': 'not found'}[it['status']], it['section'],
+                        it['term'] + (' (mandatory)' if it.get('required') == 'M' else ''),
+                        it.get('assay') or ('all samples' if it['scope'] == 'samples' else ''), it['value'], '',
+                        '; '.join(it.get('reasons') or []), it.get('evidence') or ''])
+
+
+def read_review_csv(path) -> dict:
+    """Your corrections from a review CSV: the 'your_value' column ('-' empties a value)."""
+    import csv
+    edits = {}
+    with open(path, newline='', encoding='utf-8-sig') as fh:
+        for row in csv.DictReader(fh):
+            v = (row.get('your_value') or '').strip()
+            if v and row.get('id'): edits[row['id']] = '' if v == '-' else v
+    return edits
+
+
+def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=None, profile=None, local_ai=None, edits=None) -> dict:
+    """Read one report, fill the template, and write <name>_FAIRe.xlsx plus <name>_review.csv into out_dir.
+    The review CSV lists what needs checking first; put corrections in its 'your_value' column and run again with --edits."""
     report_path, out_dir = Path(report_path), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     text = extract_report_text(report_path)
-    meta = parse_report_regex(text)
+    meta = prepare(text, profile, local_ai)
+    if edits:
+        apply_review(meta, edits)
+        for k in edits: meta.setdefault('_auto', {})[k] = {'level': 'ok', 'reasons': ['your correction'], 'origin': 'user'}
+    template = template_path or TEMPLATE_PATH
+    items = review(meta, template)
     stem = name or re.sub(r'[^A-Za-z0-9._-]+', '_', report_path.stem).strip('_') or 'report'
     out = out_dir / f'{stem}_FAIRe.xlsx'
-    summary = fill_workbook(template_path or TEMPLATE_PATH, meta, report_path.name, out)
-    with open(out_dir / f'{stem}_review.csv', 'w', newline='', encoding='utf-8') as fh:
-        w = csv.writer(fh)
-        w.writerow(['section', 'field', 'assay', 'value', 'source sentence in the report'])
-        for it in review_items(meta):
-            if it['value'] and not it['generated']:
-                w.writerow([it['section'], it['term'], it.get('assay') or ('all samples' if it['scope'] == 'samples' else ''),
-                            it['value'], it['evidence'] or ''])
-    summary['output'] = str(out)
+    summary = fill_workbook(template, meta, report_path.name, out)
+    write_review_csv(items, out_dir / f'{stem}_review.csv')
+    summary.update(output=str(out), review=review_summary(items), review_csv=str(out_dir / f'{stem}_review.csv'), meta=meta)
     return summary
 
 
@@ -2021,6 +2593,12 @@ def main(argv=None):
     p.add_argument('reports', nargs='*', help='report files (.doc .docx .pdf .txt) or folders containing them')
     p.add_argument('-t', '--template', help='FAIRe template to fill (default: the bundled FULL template)')
     p.add_argument('-o', '--out', default=str(OUTPUT_DIR), help='folder for the filled workbooks (default: outputs/)')
+    p.add_argument('--profile', help='apply a saved profile of corrections (JSON)')
+    p.add_argument('--edits', help='a review CSV with your corrections in the your_value column (one report only)')
+    p.add_argument('--save-profile', metavar='FILE', help='save the corrections from --edits into this profile (JSON)')
+    p.add_argument('--profile-name', default=None, help='name stored in a new profile')
+    p.add_argument('--local-ai', nargs='?', const=True, metavar='MODEL',
+                   help=f'second opinion from a model running in Ollama on this computer (default model: {LOCAL_MODEL})')
     p.add_argument('--port', type=int, default=int(os.environ.get('FAIRE_TOOL_PORT', '8787')))
     args = p.parse_args(argv)
 
@@ -2038,14 +2616,27 @@ def main(argv=None):
         r = Path(r)
         files += sorted(f for f in r.iterdir() if f.suffix.lower() in REPORT_TYPES) if r.is_dir() else [r]
     if not files: raise SystemExit('No reports found.')
+    if args.edits and len(files) > 1: raise SystemExit('--edits works with one report at a time.')
+    profile = json.loads(Path(args.profile).read_text(encoding='utf-8')) if args.profile else None
+    edits = read_review_csv(args.edits) if args.edits else None
     stems = [f.stem for f in files]
     for f in files:
         name = re.sub(r'[^A-Za-z0-9._-]+', '_', f.stem).strip('_') or 'report'
         if stems.count(f.stem) > 1: name += '_' + f.suffix.lstrip('.').lower()     # report.doc + report.pdf
         try:
-            s = process_report(f, args.template, args.out, name)
+            s = process_report(f, args.template, args.out, name, profile, args.local_ai, edits)
+            r = s['review']
             print(f'✓ {f.name}: {len(s["assays"])} assays, {s["sampleRows"]} sample rows -> {s["output"]}')
+            print(f'    {r["ok"]} values accepted automatically · {r["check"]} to check · {r["missing"]} not found '
+                  f'({r["missing_required"]} mandatory/highly recommended) -> {s["review_csv"]}')
+            for v in s['validation']['fixed']: print(f'    fixed: {v["sheet"]}.{v["term"]} {v["what"]} ({v["cells"]} cells)')
+            for v in s['validation']['problems']: print(f'    problem: {v["sheet"]}.{v["term"]} {v["what"]} ({v["where"]})')
             for n in s['notes']: print(f'    note: {n}')
+            if args.save_profile and edits:
+                old = json.loads(Path(args.save_profile).read_text(encoding='utf-8')) if Path(args.save_profile).exists() else None
+                prof = profile_from_review(s['meta'], edits, args.profile_name or (old or {}).get('name') or Path(args.save_profile).stem, old)
+                Path(args.save_profile).write_text(json.dumps(prof, indent=1, ensure_ascii=False), encoding='utf-8')
+                print(f'    profile saved: {args.save_profile} ({len(prof["entries"])} corrections)')
         except Exception as e:
             print(f'✗ {f.name}: {e}')
 

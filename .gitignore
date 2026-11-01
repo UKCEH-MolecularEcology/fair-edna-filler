@@ -20,3 +20,4 @@ Thumbs.db
 bench/results.md
 bench/values.csv
 *_review.csv
+*.faire-profile.json

@@ -79,6 +79,7 @@ if not files:
 lines = ['# Extraction benchmark', '', f'Reports: {len(files)} (folder `{folder.name}`)', '']
 summary_rows, value_rows = [], []
 totals = {'right': 0, 'wrong': 0, 'missed': 0}
+auto = {'right_ok': 0, 'right_check': 0, 'wrong_ok': 0, 'wrong_check': 0}
 for f in files:
     try:
         text = server.extract_report_text(f)
@@ -86,7 +87,7 @@ for f in files:
         lines += [f'## {f.name}', f'Could not read: {e}', '']; continue
     lang = server.detect_language(text) if hasattr(server, 'detect_language') else ('en', 'English')
     try:
-        meta = server.parse_report_regex(text)
+        meta = server.prepare(text)
     except Exception as e:
         import traceback
         lines += [f'## {f.name}', f'**Extractor crashed:** `{e!r}`', '```', traceback.format_exc()[-1500:], '```', '']
@@ -96,12 +97,16 @@ for f in files:
         out = Path(tmp) / 'out.xlsx'
         server.fill_workbook(server.TEMPLATE_PATH, meta, f.name, out)
         proj, samp = read_filled(out)
-    items = server.review_items(meta)
+    items = server.review(meta)
+    status = {}
+    for i in items:
+        if i['status'] == 'check' or i['term'] not in status: status[i['term']] = i['status']
     filled = [i for i in items if i['value'] and not MISSING.match(i['value']) and not i['generated']]
     for i in filled:
         value_rows.append([f.name, i['id'], i['value'][:200], (i['evidence'] or '')[:300]])
     key_name = detect_key(text)
-    row = {'file': f.name, 'chars': len(text), 'language': lang[1], 'assays': len(meta['assays']),
+    rs = server.review_summary(items)
+    row = {'file': f.name, 'auto': rs['ok'], 'check': rs['check'], 'chars': len(text), 'language': lang[1], 'assays': len(meta['assays']),
            'sites': len(meta['sites']), 'filled': len(filled), 'sourced': sum(1 for i in filled if i['evidence']), 'key': key_name or '—'}
     lines += [f'## {f.name}', f'{len(text):,} characters · language: {lang[1]} · assays: {", ".join(a["assay_name"] for a in meta["assays"]) or "none"} · '
               f'sites: {len(meta["sites"])} · rounds: {len(meta["rounds"])} · fields filled: {len(filled)} ({row["sourced"]} with a source sentence)', '']
@@ -112,14 +117,16 @@ for f in files:
             for ans in answers:
                 for part in [p.strip() for p in ans.split('|')] if term not in ('pcr_primer_forward', 'pcr_primer_reverse') else [ans]:
                     if not part: continue
-                    if any(same(part, o) for o in ours): res['right'].append(term)
-                    elif ours: res['wrong'].append(f'{term}: expected "{part[:40]}", got "{ours[0][:40]}"')
+                    flag = 'check' if status.get(term) == 'check' else 'ok'
+                    if any(same(part, o) for o in ours): res['right'].append(term); auto['right_' + flag] += 1
+                    elif ours: res['wrong'].append(f'{term}: expected "{part[:40]}", got "{ours[0][:40]}"' + (' [flagged]' if flag == 'check' else '')); auto['wrong_' + flag] += 1
                     else: res['missed'].append(f'{term} ("{part[:40]}")')
         for term, answers in k['sample'].items():
             o = samp.get(term)
             ans = answers[0]
-            if o and same(ans, o): res['right'].append(term)
-            elif o: res['wrong'].append(f'{term}: expected "{ans[:40]}", got "{o[:40]}"')
+            flag = 'check' if status.get(term) == 'check' else 'ok'
+            if o and same(ans, o): res['right'].append(term); auto['right_' + flag] += 1
+            elif o: res['wrong'].append(f'{term}: expected "{ans[:40]}", got "{o[:40]}"' + (' [flagged]' if flag == 'check' else '')); auto['wrong_' + flag] += 1
             else: res['missed'].append(f'{term} ("{ans[:40]}")')
         n = sum(len(v) for v in res.values())
         for x in res: totals[x] += len(res[x])
@@ -133,13 +140,16 @@ for f in files:
     summary_rows.append(row)
 
 scored = totals['right'] + totals['wrong'] + totals['missed']
-head = ['', '## Summary', '', '| Report | Language | Assays | Sites | Fields filled | With source | Answer key | Right | Wrong | Missed |', '|---|---|---|---|---|---|---|---|---|---|']
+head = ['', '## Summary', '', '| Report | Language | Assays | Sites | Fields filled | Accepted automatically | Needs a look | Answer key | Right | Wrong | Missed |',
+        '|---|---|---|---|---|---|---|---|---|---|---|']
 for r in summary_rows:
-    head.append(f"| {r['file'][:45]} | {r['language']} | {r['assays']} | {r['sites']} | {r['filled']} | {r['sourced']} | {r['key']} | "
+    head.append(f"| {r['file'][:45]} | {r['language']} | {r['assays']} | {r['sites']} | {r['filled']} | {r['auto']} | {r['check']} | {r['key']} | "
                 f"{r.get('right', '')} | {r.get('wrong', '')} | {r.get('missed', '')} |")
 if scored:
     head += ['', f"**Scored fields overall: right {totals['right']}/{scored} ({100 * totals['right'] // scored}%), "
-                 f"wrong {totals['wrong']}, missed {totals['missed']}.**"]
+                 f"wrong {totals['wrong']}, missed {totals['missed']}.**",
+             '', f"Automatic review: of the values accepted automatically, {auto['right_ok']} were right and {auto['wrong_ok']} wrong; "
+                 f"of the values flagged for a look, {auto['right_check']} were right and {auto['wrong_check']} wrong."]
 (HERE / 'results.md').write_text('\n'.join(lines[:4] + head + [''] + lines[4:]), encoding='utf-8')
 with open(HERE / 'values.csv', 'w', newline='', encoding='utf-8') as fh:
     csv.writer(fh).writerows([['report', 'field', 'value', 'source sentence']] + value_rows)

@@ -142,6 +142,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .rv-src q{font-style:italic}
 .rv-src.none{color:#9A6B00}
 .rv-src.gen{color:var(--muted)}
+.rv-tabs{display:flex;flex-wrap:wrap;gap:.35rem;margin:.6rem 0 .2rem}
+.rv-tabs button{border:1.5px solid var(--air);background:#fff;border-radius:100px;padding:.3rem .8rem;font:inherit;font-size:.78rem;font-weight:600;color:var(--muted);cursor:pointer}
+.rv-tabs button.on{background:var(--water);border-color:var(--water);color:#fff}
+.chip{display:inline-block;margin-top:.25rem;font-size:.66rem;font-weight:700;border-radius:100px;padding:.05rem .5rem}
+.chip.check{background:#FFF1C2;color:#7A5600}.chip.ok{background:var(--land-20);color:#3A5020}.chip.missing{background:#EEF1F1;color:#5F6B6A}
+.rv-why{font-size:.74rem;margin-top:.2rem;color:#7A5600}.rv-why.ok{color:#3A5020}
+.rv-confirm{margin-top:.3rem;border:1px solid var(--land);background:#fff;color:#3A5020;border-radius:6px;font:inherit;font-size:.72rem;font-weight:600;padding:.15rem .55rem;cursor:pointer}
+.profile-row{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.7rem 0 .1rem;font-size:.8rem;color:var(--muted)}
+.profile-row input[type=file]{font-size:.75rem}
+.val-list{font-size:.78rem;color:var(--muted);padding-left:1.1rem;display:flex;flex-direction:column;gap:.25rem}
+.save-prof{display:flex;gap:.4rem;margin-top:.8rem}
+.save-prof input{flex:1;border:1.5px solid var(--air);border-radius:6px;padding:.35rem .5rem;font:inherit;font-size:.8rem}
+.save-prof button{border:1.5px solid var(--water);background:#fff;color:var(--water);border-radius:6px;font:inherit;font-size:.78rem;font-weight:600;padding:.35rem .7rem;cursor:pointer}
 </style>
 </head>
 <body>
@@ -212,6 +225,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         </div>
       </label>
 
+      <label class="profile-row">Your profile <span style="font-weight:400">(optional – corrections saved from earlier reports)</span>
+        <input id="prof" type="file" accept=".json"/></label>
+
       <!-- Optional: Claude (only for non-confidential reports) -->
       <details class="claude-opt" id="claudeBox">
         <summary>Advanced: let Claude read the report <span class="opt-tag">off · not for confidential reports</span></summary>
@@ -220,7 +236,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         <div class="key-row">
           <input id="apiKey" type="password" placeholder="Claude API key (sk-ant-…) – used for this run only, never stored" autocomplete="off" disabled/>
         </div>
-        <p class="small-note">Claude can read unusual layouts and other languages. Every value it returns must quote the report; values whose quote can't be found in the report are discarded. Leave this off and nothing leaves your computer.</p>
+        <p class="small-note">Claude gives a second opinion and can read unusual layouts and other languages. Every value it returns must quote the report; values whose quote can't be found are discarded, and anything it adds is marked for checking. Leave this off and nothing leaves your computer.</p>
       </details>
 
       <button class="btn" id="readBtn">
@@ -233,9 +249,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
       <div class="card-label">Check the values</div>
       <div id="reviewNotes" class="warn hidden"></div>
       <p class="small-note" id="reviewSummary"></p>
-      <div class="review-tools">
-        <label><input type="checkbox" id="showEmpty"/> Show fields the report doesn't state</label>
-        <label><input type="checkbox" id="showGenerated"/> Show values set by the tool</label>
+      <div class="rv-tabs" id="rvTabs">
+        <button data-view="check" class="on">Needs a look</button>
+        <button data-view="missing">Not found</button>
+        <button data-view="ok">Accepted automatically</button>
+        <button data-view="all">All</button>
       </div>
       <div id="reviewBody"></div>
       <button class="btn" id="fillBtn">
@@ -267,6 +285,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Download filled workbook
       </button>
+      <div id="valBlock" class="hidden" style="margin-top:1rem">
+        <div class="card-label" style="margin-bottom:.4rem">FAIRe checks</div>
+        <ul id="rVal" class="val-list"></ul>
+      </div>
+      <div class="save-prof" title="Save your corrections so the next report of this kind is corrected automatically">
+        <input id="profName" placeholder="Profile name, e.g. UKCEH lakes reports"/>
+        <button id="saveProf">Save my corrections</button>
+      </div>
       <div id="notesBlock" class="hidden" style="margin-top:1rem">
         <div class="card-label" style="margin-bottom:.4rem">Check these by hand</div>
         <ul id="rNotes" style="font-size:.8rem;color:var(--muted);padding-left:1.1rem;display:flex;flex-direction:column;gap:.3rem"></ul>
@@ -280,7 +306,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         <li><strong>sampleMetadata</strong> — one row per sample &amp; field blank</li>
         <li><strong>experimentRunMetadata</strong> — one row per sample × assay</li>
       </ul>
-      <p>Every value shows the sentence it came from. Anything the report doesn't state is entered as "missing: not provided" (FAIRe wording), so nothing is guessed.</p>
+      <p>Values with a clear source in the report, that pass the FAIRe format checks, are accepted automatically. You only look at the ones flagged. Anything the report doesn't state is entered as "missing: not provided" (FAIRe wording).</p>
+      <p style="margin-top:.6rem"><strong>Profiles:</strong> after filling, <em>Save my corrections</em> downloads a small file. Load it next time and the same corrections are applied for you.</p>
       <p style="margin-top:.6rem"><strong>Private by default:</strong> the built-in reader runs entirely in your browser. Claude is only used if you switch it on for a non-confidential report.</p>
     </div>
   </aside>
@@ -381,38 +408,50 @@ async function loadTemplate(py) {
   py.FS.writeFile('/faire/template.xlsx', bytes);
 }
 
+let view = 'check', confirmed = new Set(), edits = {}, profile = null;
+const isMissing = v => !v || /^(missing:|not applicable)/.test(v);
+const statusOf = it => confirmed.has(it.id) || (edits[it.id] !== undefined && edits[it.id] !== (isMissing(it.value) ? '' : it.value)) ? 'ok' : it.status;
+
 function renderReview() {
-  const showEmpty = $('showEmpty').checked, showGen = $('showGenerated').checked;
-  const isMissing = v => !v || /^(missing:|not applicable)/.test(v);
-  let html = '', section = '';
-  for (const it of items) {
-    if (isMissing(it.value) && !showEmpty) continue;
-    if (it.generated && !showGen && !isMissing(it.value)) continue;
-    if (it.section !== section) { section = it.section; html += `<div class="rv-section">${esc(section)}</div>`; }
-    const src = it.generated ? '<div class="rv-src gen">Set by the tool (FAIRe rules or the report structure)</div>'
-      : it.evidence ? `<div class="rv-src">From the report: <q>${esc(it.evidence)}</q></div>`
-      : isMissing(it.value) ? '<div class="rv-src none">Not stated in the report – type a value if you know it</div>'
-      : '<div class="rv-src none">No source sentence – please check</div>';
-    const val = isMissing(it.value) ? '' : it.value;
-    html += `<div class="rv-row"><div class="rv-term">${esc(it.term)}${it.assay ? `<br><span class="rv-assay">${esc(it.assay)}</span>` : ''}${it.scope === 'samples' ? '<br><span class="rv-assay">all samples</span>' : ''}</div>
-      <div class="rv-val"><textarea data-id="${esc(it.id)}" data-orig="${esc(val)}" rows="${Math.min(4, Math.ceil((val.length || 1) / 70))}">${esc(val)}</textarea>${src}</div></div>`;
+  const counts = { check: 0, missing: 0, ok: 0, all: 0 };
+  for (const it of items) { if (it.generated && it.status === 'ok') continue; counts[statusOf(it)]++; counts.all++; }
+  for (const b of $('rvTabs').querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.view === view);
+    b.textContent = { check: 'Needs a look', missing: 'Not found', ok: 'Accepted automatically', all: 'All' }[b.dataset.view] + ` (${counts[b.dataset.view]})`;
   }
+  let html = '', section = '';
+  const shown = items.filter(it => view === 'all' ? !(it.generated && it.status === 'ok') : statusOf(it) === view && !(it.generated && it.status === 'ok'));
+  if (view === 'missing') shown.sort((a, b) => (['M', 'HR'].includes(b.required) ? 1 : 0) - (['M', 'HR'].includes(a.required) ? 1 : 0));
+  for (const it of shown) {
+    if (it.section !== section && view !== 'missing') { section = it.section; html += `<div class="rv-section">${esc(section)}</div>`; }
+    const st = statusOf(it);
+    const src = it.evidence ? `<div class="rv-src">From the report: <q>${esc(it.evidence)}</q></div>`
+      : it.generated ? '<div class="rv-src gen">Set by the tool (FAIRe rules or the report structure)</div>' : '';
+    const why = (it.reasons || []).length ? `<div class="rv-why ${st === 'check' ? '' : 'ok'}">${esc(it.reasons.join(' · '))}</div>` : '';
+    const label = { check: 'needs a look', ok: confirmed.has(it.id) ? 'confirmed' : 'accepted', missing: ['M', 'HR'].includes(it.required) ? 'not found · required' : 'not found' }[st];
+    const val = isMissing(it.value) ? '' : it.value;
+    html += `<div class="rv-row"><div class="rv-term">${esc(it.term)}${it.assay ? `<br><span class="rv-assay">${esc(it.assay)}</span>` : ''}${it.scope === 'samples' ? '<br><span class="rv-assay">all samples</span>' : ''}<br><span class="chip ${st}">${label}</span></div>
+      <div class="rv-val"><textarea data-id="${esc(it.id)}" data-orig="${esc(val)}" rows="${Math.min(4, Math.ceil((val.length || 1) / 70))}">${esc(val)}</textarea>${why}${src}
+      ${st === 'check' ? `<button class="rv-confirm" data-id="${esc(it.id)}">✓ Looks right</button>` : ''}</div></div>`;
+  }
+  if (!shown.length) html = `<p class="small-note" style="margin:1rem 0">${view === 'check' ? 'Nothing left to check – you can fill the workbook.' : 'Nothing here.'}</p>`;
   $('reviewBody').innerHTML = html;
   for (const ta of $('reviewBody').querySelectorAll('textarea')) {
     const prev = edits[ta.dataset.id];
-    if (prev !== undefined) { ta.value = prev; ta.classList.add('changed'); }
+    if (prev !== undefined) { ta.value = prev; ta.classList.toggle('changed', prev !== ta.dataset.orig); }
     ta.addEventListener('input', () => { edits[ta.dataset.id] = ta.value; ta.classList.toggle('changed', ta.value !== ta.dataset.orig); });
+    ta.addEventListener('change', () => { if (view === 'check') renderReview(); });
   }
+  for (const b of $('reviewBody').querySelectorAll('.rv-confirm'))
+    b.addEventListener('click', () => { confirmed.add(b.dataset.id); renderReview(); });
 }
-let edits = {};
-$('showEmpty').addEventListener('change', renderReview);
-$('showGenerated').addEventListener('change', renderReview);
+$('rvTabs').addEventListener('click', e => { if (e.target.dataset.view) { view = e.target.dataset.view; renderReview(); } });
 
 $('readBtn').addEventListener('click', async () => {
   const rpt = $('rpt').files[0];
   if (!rpt) { setStatus('Please choose your report.', 0); return; }
   $('readBtn').disabled = true; $('resultCard').classList.add('hidden'); $('reviewCard').classList.add('hidden');
-  outBytes = null; edits = {};
+  outBytes = null; edits = {}; confirmed = new Set(); view = 'check'; profile = null;
   try {
     setStatus('Starting the Python engine…', 15);
     const py = await loadEngine();
@@ -426,29 +465,38 @@ $('readBtn').addEventListener('click', async () => {
     setStatus('Reading the report…', 45);
     py.globals.set('report_path', reportPath);
     py.globals.set('report_name', rpt.name);
-    py.runPython("text = faire.extract_report_text(report_path)\nmeta = faire.parse_report_regex(text)");
-    method = 'Built-in reader (private)';
+    let tplPath = 'None';
+    try { await loadTemplate(py); tplPath = "'/faire/template.xlsx'"; } catch (e) { /* checked again when filling */ }
+    if ($('prof').files[0]) {
+      try { profile = JSON.parse(await new Promise((ok, bad) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = () => bad(fr.error); fr.readAsText($('prof').files[0]); })); $('profName').value = profile.name || ''; }
+      catch (e) { throw new Error('The profile file could not be read (it should be a .json file saved by this tool).'); }
+    }
+    py.globals.set('profile_json', profile ? JSON.stringify(profile) : 'null');
+    py.runPython("text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json))");
+    method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '');
     const key = $('apiKey').value.trim();
     if (key && $('claudeConsent').checked) {
       try {
         setStatus('Asking Claude to read the report…', 55);
         py.globals.set('reply', await claudeExtract(py, py.globals.get('text'), key));
-        py.runPython("lang_note = [n for n in meta['notes'] if n.startswith('This report appears')]\nmeta = faire.facts_from_claude(faire.json_from_reply(reply), text)");
-        method = 'Claude (with quote check)';
+        py.runPython("faire.second_opinion(meta, faire.facts_from_claude(faire.json_from_reply(reply), text), 'Claude')");
+        method += ' + Claude second opinion';
       } catch (e) {
         py.globals.set('err', String(e.message || e));
         py.runPython("meta['notes'].append('Claude could not be used (' + err[:120] + '); the built-in reader was used instead')");
       }
     }
-    items = JSON.parse(py.runPython("json.dumps(faire.review_items(meta))"));
+    items = JSON.parse(py.runPython(`json.dumps(faire.review(meta, ${tplPath}))`));
     const notes = JSON.parse(py.runPython("json.dumps(meta.get('notes') or [])"));
-    const found = items.filter(i => i.value && !/^(missing:|not applicable)/.test(i.value) && !i.generated);
-    $('reviewSummary').textContent = `${found.length} values found (${found.filter(i => i.evidence).length} with the sentence they came from) · ${method}. Edit anything that's wrong; empty a box if the report doesn't really say it.`;
+    const c = { ok: 0, check: 0, missing: 0 };
+    for (const i of items) if (!(i.generated && i.status === 'ok')) c[i.status]++;
+    $('reviewSummary').textContent = `${c.ok} values accepted automatically · ${c.check} need a look · ${c.missing} not found in the report · ${method}. ` +
+      `Correct anything that's wrong (or click "Looks right"); empty a box if the report doesn't really say it.`;
     $('reviewNotes').innerHTML = notes.length ? '<strong>Please note:</strong><ul style="margin:.3rem 0 0 1.1rem">' + notes.map(n => `<li>${esc(n)}</li>`).join('') + '</ul>' : '';
     $('reviewNotes').classList.toggle('hidden', !notes.length);
     renderReview();
     $('reviewCard').classList.remove('hidden');
-    setStatus('Check the values, then click "Fill workbook with these values".', 70);
+    setStatus(c.check ? `Check the ${c.check} flagged value(s), then click "Fill workbook with these values".` : 'Nothing flagged – click "Fill workbook with these values".', 70);
     $('reviewCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) {
     console.error(e);
@@ -475,12 +523,32 @@ $('fillBtn').addEventListener('click', async () => {
     const notes = $('rNotes'); notes.innerHTML = '';
     for (const n of summary.notes || []) { const li = document.createElement('li'); li.textContent = n; notes.appendChild(li); }
     $('notesBlock').classList.toggle('hidden', !(summary.notes || []).length);
+    const v = summary.validation || { fixed: [], problems: [] }, vl = $('rVal'); vl.innerHTML = '';
+    for (const x of v.problems) { const li = document.createElement('li'); li.textContent = `⚠ ${x.sheet} · ${x.term}: ${x.what} (${x.where})`; vl.appendChild(li); }
+    for (const x of v.fixed) { const li = document.createElement('li'); li.textContent = `✓ fixed ${x.sheet} · ${x.term}: ${x.what}` + (x.cells > 1 ? ` (${x.cells} cells)` : ''); vl.appendChild(li); }
+    if (!v.problems.length) { const li = document.createElement('li'); li.textContent = '✓ Passes the FAIRe format, vocabulary and ID checks'; vl.prepend(li); }
+    $('valBlock').classList.remove('hidden');
     setStatus('Done – download your workbook.', 100);
     $('resultCard').classList.remove('hidden');
   } catch (e) {
     console.error(e);
     setStatus('Error: ' + (e.message || e).toString().split('\n').filter(Boolean).pop(), 100);
   } finally { $('fillBtn').disabled = false; }
+});
+
+$('saveProf').addEventListener('click', async () => {
+  const changed = Object.fromEntries(Object.entries(edits).filter(([k, val]) => { const it = items.find(i => i.id === k); return it && val !== (isMissing(it.value) ? '' : it.value); }));
+  if (!Object.keys(changed).length) { setStatus('No corrections to save – edit a value first.', 100); return; }
+  const py = await loadEngine();
+  py.globals.set('changed_json', JSON.stringify(changed));
+  py.globals.set('prof_name', $('profName').value.trim() || (profile && profile.name) || 'my FAIRe profile');
+  py.globals.set('profile_json', profile ? JSON.stringify(profile) : 'null');
+  const out = py.runPython("json.dumps(faire.profile_from_review(meta, json.loads(changed_json), prof_name, json.loads(profile_json)), indent=1, ensure_ascii=False)");
+  const name = (JSON.parse(out).name || 'profile').replace(/[^A-Za-z0-9_-]+/g, '_') + '.faire-profile.json';
+  const url = URL.createObjectURL(new Blob([out], { type: 'application/json' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  setStatus(`Saved ${Object.keys(changed).length} correction(s) to ${name}. Load it next time under "Your profile".`, 100);
 });
 
 $('dlBtn').addEventListener('click', () => {
