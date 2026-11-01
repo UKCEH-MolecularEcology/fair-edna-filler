@@ -1,3 +1,3 @@
 # Only needed for the Python version (python3 server.py). The browser version and Colab need nothing.
-pdfplumber>=0.11   # reading PDF reports
-anthropic>=0.40    # optional: Claude-assisted extraction
+pypdf>=4.0         # reading PDF reports
+anthropic>=0.40    # optional, only for non-confidential reports: Claude-assisted extraction

@@ -17,3 +17,6 @@ outputs/
 .env
 .DS_Store
 Thumbs.db
+bench/results.md
+bench/values.csv
+*_review.csv

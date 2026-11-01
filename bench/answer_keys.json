@@ -1,0 +1,737 @@
+{
+ "CPR_2015": {
+  "match": "Genetic monitoring of open ocean biodiversity",
+  "kind": "metabarcoding",
+  "project": {
+   "assay_type": [
+    "metabarcoding"
+   ],
+   "target_gene": [
+    "COI"
+   ],
+   "pcr_primer_name_forward": [
+    "ILF_mlCOIintF"
+   ],
+   "pcr_primer_name_reverse": [
+    "ILR_jgHCO2198"
+   ],
+   "pcr_primer_forward": [
+    "GGWACWGGWTGAACWGTWTAYCCYCC"
+   ],
+   "pcr_primer_reverse": [
+    "TAIACYTCIGGRTGICCRAARAAYCA"
+   ],
+   "amplificationReactionVolume": [
+    "15"
+   ],
+   "pcr_rep": [
+    "3"
+   ],
+   "annealingTemp": [
+    "46"
+   ],
+   "pcr_cycles": [
+    "35"
+   ],
+   "platform": [
+    "ILLUMINA"
+   ],
+   "instrument": [
+    "MiSeq [OBI_0002003]"
+   ],
+   "seq_kit": [
+    "MiSeq 250 bp paired end"
+   ],
+   "lib_layout": [
+    "paired end"
+   ],
+   "barcoding_pcr_appr": [
+    "two-step PCR"
+   ],
+   "merge_tool": [
+    "USEARCH v8.0.1623"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "5"
+   ],
+   "samp_size_unit": [
+    "other:nautical miles"
+   ],
+   "size_frac": [
+    "270"
+   ],
+   "filter_material": [
+    "nylon"
+   ],
+   "nucl_acid_ext_kit": [
+    "Qiagen Dneasy Blood & Tissue kit"
+   ],
+   "env_medium": [
+    "planktonic material [ENVO:01000063]"
+   ],
+   "samp_store_temp": [
+    "4"
+   ],
+   "samp_store_sol": [
+    "ethanol"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "IOT-eDNA": {
+  "match": "Indian Ocean Territor",
+  "kind": "metabarcoding",
+  "project": {
+   "assay_type": [
+    "metabarcoding"
+   ],
+   "target_gene": [
+    "16S rRNA (LSU mitochondria)",
+    "COI"
+   ],
+   "pcr_primer_forward": [
+    "GACCCTATGGAGCTTTAGAC",
+    "GGWACWGGWTGAACWGTWTAYCCYCC"
+   ],
+   "pcr_primer_reverse": [
+    "CAAGCAGAAGACGGCATACGAGAT",
+    "TAIACYTCIGGRTGICCRAARAAYCA"
+   ],
+   "amplificationReactionVolume": [
+    "25"
+   ],
+   "platform": [
+    "ILLUMINA"
+   ],
+   "instrument": [
+    "Illumina NovaSeq [OBI_0003685]"
+   ],
+   "lib_layout": [
+    "paired end"
+   ],
+   "trim_method": [
+    "cutadapt v4.1"
+   ],
+   "merge_tool": [
+    "DADA2 1.30.0"
+   ],
+   "otu_db": [
+    "NCBI GenBank"
+   ],
+   "tax_assign_cat": [
+    "sequence similarity"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "10"
+   ],
+   "samp_size_unit": [
+    "L"
+   ],
+   "size_frac": [
+    "0.45"
+   ],
+   "filter_material": [
+    "other: mixed cellulose ester"
+   ],
+   "filter_diameter": [
+    "47"
+   ],
+   "nucl_acid_ext_kit": [
+    "QIAGEN Blood and Tissue"
+   ],
+   "env_medium": [
+    "sea water [ENVO:00002149]"
+   ],
+   "samp_store_temp": [
+    "-80"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "NECR534_GCN_metabarcoding": {
+  "match": "NECR534",
+  "kind": "metabarcoding",
+  "project": {
+   "assay_type": [
+    "metabarcoding"
+   ],
+   "target_gene": [
+    "12S rRNA (SSU mitochondria)"
+   ],
+   "pcr_primer_name_forward": [
+    "Riaz_12S_V5F"
+   ],
+   "pcr_primer_name_reverse": [
+    "Riaz_12S_V5R"
+   ],
+   "pcr_primer_forward": [
+    "TAGAACAGGCTCCTCTAG"
+   ],
+   "pcr_primer_reverse": [
+    "TTAGATACCCCACTATGC"
+   ],
+   "amplificationReactionVolume": [
+    "25"
+   ],
+   "pcr_dna_vol": [
+    "5"
+   ],
+   "pcr_rep": [
+    "3"
+   ],
+   "commercial_mm": [
+    "Taqman Environmental mastermix 2.0 (Fisher Scientific)"
+   ],
+   "annealingTemp": [
+    "52"
+   ],
+   "pcr_cycles": [
+    "45"
+   ],
+   "platform": [
+    "ILLUMINA"
+   ],
+   "instrument": [
+    "llumina MiSeq"
+   ],
+   "seq_kit": [
+    "MiSeq Reagent  v2 500 cycle"
+   ],
+   "lib_layout": [
+    "paired end"
+   ],
+   "barcoding_pcr_appr": [
+    "two-step PCR"
+   ],
+   "trim_method": [
+    "trimmomatic 0.39"
+   ],
+   "merge_tool": [
+    "FLASH 1.2.11"
+   ],
+   "otu_db": [
+    "NCBI"
+   ],
+   "tax_assign_cat": [
+    "BLAST"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "600"
+   ],
+   "samp_size_unit": [
+    "mL"
+   ],
+   "size_frac": [
+    "0.45"
+   ],
+   "filter_material": [
+    "Not recorded"
+   ],
+   "filter_diameter": [
+    "54"
+   ],
+   "nucl_acid_ext_kit": [
+    "Qiagen Blood & Tissue Kit"
+   ],
+   "env_medium": [
+    "liquid water [ENVO:00002006]"
+   ],
+   "samp_store_temp": [
+    "ambient temperature"
+   ],
+   "prepped_samp_store_sol": [
+    "ethanol"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "noaa-aoml-gomecc4": {
+  "match": "marine microbes in the Gulf of Mexico",
+  "kind": "metabarcoding",
+  "project": {
+   "assay_type": [
+    "metabarcoding"
+   ],
+   "target_gene": [
+    "16S rRNA (SSU prokaryote)",
+    "18S rRNA (SSU eukaryote)"
+   ],
+   "pcr_primer_name_forward": [
+    "515F-Y",
+    "1391f"
+   ],
+   "pcr_primer_name_reverse": [
+    "926R",
+    "EukBr"
+   ],
+   "pcr_primer_forward": [
+    "GTGYCAGCMGCCGCGGTAA",
+    "GTACACACCGCCCGTC"
+   ],
+   "pcr_primer_reverse": [
+    "CCGYCAATTYMTTTRAGTTT",
+    "TGATCCTTCTGCAGGTTCACCTAC"
+   ],
+   "amplificationReactionVolume": [
+    "13",
+    "13"
+   ],
+   "pcr_dna_vol": [
+    "1",
+    "1"
+   ],
+   "pcr_rep": [
+    "3",
+    "3"
+   ],
+   "commercial_mm": [
+    "AmpliTaq Gold 360 Master Mix, Thermo Fisher Scientific",
+    "AmpliTaq Gold 360 Master Mix, Thermo Fisher Scientific"
+   ],
+   "annealingTemp": [
+    "50",
+    "65 | 57"
+   ],
+   "pcr_cycles": [
+    "25",
+    "35"
+   ],
+   "platform": [
+    "ILLUMINA",
+    "ILLUMINA"
+   ],
+   "instrument": [
+    "Illumina MiSeq [OBI_0002003]",
+    "Illumina MiSeq [OBI_0002003]"
+   ],
+   "seq_kit": [
+    "MiSeq v2 500",
+    "MiSeq v2 500"
+   ],
+   "lib_layout": [
+    "paired end"
+   ],
+   "barcoding_pcr_appr": [
+    "two-step PCR",
+    "two-step PCR"
+   ],
+   "trim_method": [
+    "cutadapt"
+   ],
+   "merge_tool": [
+    "qiime2-2021.2;  DADA2 1.18.0"
+   ],
+   "otu_db": [
+    "Silva SSU Ref NR 99 v138.1; 515f-926r region; 10.5281/zenodo.8392695",
+    "PR2 v5.0.1; V9 1391f-1510r region; 10.5281/zenodo.8392706"
+   ],
+   "tax_assign_cat": [
+    "sequence composition"
+   ],
+   "neg_cont_0_1": [
+    "1"
+   ],
+   "pos_cont_0_1": [
+    "1"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "1100",
+    "1180",
+    "1240"
+   ],
+   "samp_size_unit": [
+    "ml"
+   ],
+   "size_frac": [
+    "0.22"
+   ],
+   "filter_material": [
+    "polyethersulfone"
+   ],
+   "nucl_acid_ext_kit": [
+    "ZymoBIOMICS 96 MagBead DNA Kit"
+   ],
+   "env_medium": [
+    "sea water [ENVO:00002149]",
+    "sea water [ENVO:00002149]|marine sediment [ENVO:03000033]"
+   ],
+   "samp_store_temp": [
+    "-80"
+   ],
+   "samp_store_sol": [
+    "none"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "verte_quadeloupe": {
+  "match": "Guadeloupe",
+  "kind": "metabarcoding",
+  "project": {
+   "assay_type": [
+    "metabarcoding"
+   ],
+   "target_gene": [
+    "12S rRNA (SSU mitochondria)",
+    "12S rRNA (SSU mitochondria)",
+    "12S rRNA (SSU mitochondria)",
+    "12S rRNA (SSU mitochondria)"
+   ],
+   "pcr_primer_forward": [
+    "TAGAACAGGCTCCTCTAG",
+    "ACACCGCCCGTCACTCT",
+    "CCGCCCGTCACYCTCCT",
+    "CATACGATAAGTTAAAGCTCG"
+   ],
+   "pcr_primer_reverse": [
+    "TTAGATACCCCACTATGC",
+    "CTTCCGGTACTACCATG",
+    "GTAYRCTTACCWTGTTACGAC",
+    "GATCATTACTAGCTACCCCC"
+   ],
+   "annealingTemp": [
+    "55"
+   ],
+   "platform": [
+    "ILLUMINA"
+   ],
+   "instrument": [
+    "MiSeq [OBI_0002003]"
+   ],
+   "lib_layout": [
+    "paired"
+   ],
+   "otu_db": [
+    "EMBL nr;142, Genbank nr;258"
+   ],
+   "tax_assign_cat": [
+    "other: sequence similarity, taxonomy and distribution"
+   ],
+   "neg_cont_0_1": [
+    "0"
+   ],
+   "pos_cont_0_1": [
+    "0"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "30"
+   ],
+   "samp_size_unit": [
+    "L"
+   ],
+   "size_frac": [
+    "0.2"
+   ],
+   "nucl_acid_ext_kit": [
+    "NucleoSpin Soil (Macherey-Nagel GmbH & Co., DÃ¼ren, Germany)"
+   ],
+   "env_medium": [
+    "water surface [ENVO:01001191]"
+   ],
+   "prepped_samp_store_sol": [
+    "80 mL of CL1 DNA preservation buffer (SPYGEN)Â"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "AEP_Fish_sedDNA": {
+  "match": "sedimentary DNA reveals.{0,80}fish|fish.{0,40}sedDNA",
+  "kind": "targeted",
+  "project": {
+   "assay_type": [
+    "targeted"
+   ],
+   "target_gene": [
+    "other: mt-RNR1",
+    "CytB",
+    "ND6"
+   ],
+   "pcr_primer_forward": [
+    "CACCTAGAGGAGCCTGTTCTA",
+    "TCTCCACAGCCTTCTCATC",
+    "CACCACAAATAGCGTTAG"
+   ],
+   "pcr_primer_reverse": [
+    "CTACACCTCGACCTGACGTT",
+    "CCGCCTCAGATTCATTGG",
+    "GTAGCCCTAATATACTCTTCA"
+   ],
+   "amplificationReactionVolume": [
+    "15"
+   ],
+   "pcr_dna_vol": [
+    "2"
+   ],
+   "pcr_rep": [
+    "8"
+   ],
+   "commercial_mm": [
+    "Qiagen Qiacuty Probe Kit"
+   ],
+   "annealingTemp": [
+    "64"
+   ],
+   "pcr_cycles": [
+    "50",
+    "50",
+    "50"
+   ],
+   "neg_cont_0_1": [
+    "1"
+   ],
+   "pos_cont_0_1": [
+    "1"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "10"
+   ],
+   "samp_size_unit": [
+    "g"
+   ],
+   "nucl_acid_ext_kit": [
+    "Norgen Soil Maxi Kit"
+   ],
+   "env_medium": [
+    "lake sediment [ENVO:00000546]"
+   ],
+   "samp_store_temp": [
+    "-80"
+   ],
+   "samp_store_sol": [
+    "none"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "EirwiniBurdekin": {
+  "match": "Elseya irwini|Burdekin",
+  "kind": "targeted",
+  "project": {
+   "assay_type": [
+    "targeted"
+   ],
+   "target_gene": [
+    "ND4"
+   ],
+   "pcr_primer_name_forward": [
+    "Espp_F"
+   ],
+   "pcr_primer_name_reverse": [
+    "Espp_R"
+   ],
+   "pcr_primer_forward": [
+    "AACTCAATCTGCCATACCCAAAGA"
+   ],
+   "pcr_primer_reverse": [
+    "TCTACATGTGCTTTTGGTAGTCACA"
+   ],
+   "amplificationReactionVolume": [
+    "20"
+   ],
+   "pcr_dna_vol": [
+    "6"
+   ],
+   "pcr_rep": [
+    "8"
+   ],
+   "commercial_mm": [
+    "Environmental Master Mix 2.0, Thermo Fisher"
+   ],
+   "annealingTemp": [
+    "60"
+   ],
+   "pcr_cycles": [
+    "45"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "300"
+   ],
+   "samp_size_unit": [
+    "mL"
+   ],
+   "env_medium": [
+    "river water [ENVO:01000599]"
+   ],
+   "samp_store_temp": [
+    "ambient temperature"
+   ],
+   "prepped_samp_store_sol": [
+    "lysis buffer"
+   ],
+   "samp_store_sol": [
+    "longmire"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "NECR534_GCN_single-species": {
+  "match": "NECR534",
+  "kind": "targeted",
+  "project": {
+   "assay_type": [
+    "targeted"
+   ],
+   "target_gene": [
+    "CytB"
+   ],
+   "pcr_primer_name_forward": [
+    "TCCBL"
+   ],
+   "pcr_primer_name_reverse": [
+    "TCCBR"
+   ],
+   "pcr_primer_forward": [
+    "CGTAAACTACGGCTGACTAGTACGAA"
+   ],
+   "pcr_primer_reverse": [
+    "CCGATGTGTATGTAGATGCAAACA"
+   ],
+   "amplificationReactionVolume": [
+    "25"
+   ],
+   "pcr_dna_vol": [
+    "3"
+   ],
+   "pcr_rep": [
+    "12"
+   ],
+   "commercial_mm": [
+    "TaqMan® Environmental Master Mix 2.0, Applied Biosystems"
+   ],
+   "annealingTemp": [
+    "52"
+   ],
+   "pcr_cycles": [
+    "55"
+   ],
+   "neg_cont_0_1": [
+    "1"
+   ],
+   "pos_cont_0_1": [
+    "1"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "600"
+   ],
+   "samp_size_unit": [
+    "mL"
+   ],
+   "size_frac": [
+    "0.45"
+   ],
+   "filter_material": [
+    "thermoplastic membrane"
+   ],
+   "filter_diameter": [
+    "54"
+   ],
+   "nucl_acid_ext_kit": [
+    "Qiagen DNeasy Blood & Tissue Kit"
+   ],
+   "env_medium": [
+    "liquid water [ENVO:00002006]"
+   ],
+   "samp_store_temp": [
+    "ambient temperature"
+   ],
+   "prepped_samp_store_sol": [
+    "ethanol"
+   ],
+   "samp_store_sol": [
+    "none"
+   ]
+  },
+  "search_chars": 6000
+ },
+ "Rockfish_targeted_qPCR": {
+  "match": "[Rr]ockfish",
+  "kind": "targeted",
+  "project": {
+   "assay_type": [
+    "targeted"
+   ],
+   "target_gene": [
+    "D-loop",
+    "ND5",
+    "D-loop"
+   ],
+   "pcr_primer_forward": [
+    "CGAAGGTATTACATAAAGCA",
+    "CCAGTAAACAATACAAAACTAC",
+    "CTACCAGTCCACTCATAA"
+   ],
+   "pcr_primer_reverse": [
+    "GAGTGTTTGTGTTAGGTCTTA",
+    "CCTAGAATTAAATTCAGCTTG",
+    "TGGGATTTCATATTCTACTTG"
+   ],
+   "amplificationReactionVolume": [
+    "25"
+   ],
+   "pcr_dna_vol": [
+    "2"
+   ],
+   "pcr_rep": [
+    "8"
+   ],
+   "commercial_mm": [
+    "QIAcuity Probe PCR kit"
+   ],
+   "annealingTemp": [
+    "64"
+   ],
+   "pcr_cycles": [
+    "50"
+   ]
+  },
+  "sample": {
+   "samp_size": [
+    "1"
+   ],
+   "samp_size_unit": [
+    "L"
+   ],
+   "size_frac": [
+    "0.45"
+   ],
+   "filter_material": [
+    "mixed nitrocellulose"
+   ],
+   "filter_diameter": [
+    "47"
+   ],
+   "nucl_acid_ext_kit": [
+    "DNeasy Blood and Tissue kit"
+   ],
+   "env_medium": [
+    "sea water [ENVO:00002149]"
+   ],
+   "samp_store_temp": [
+    "4"
+   ],
+   "prepped_samp_store_sol": [
+    "10 mM Tris-Cl; 0.5 mM EDTA; pH 9.0"
+   ],
+   "samp_store_sol": [
+    "none"
+   ]
+  },
+  "search_chars": 6000
+ }
+}

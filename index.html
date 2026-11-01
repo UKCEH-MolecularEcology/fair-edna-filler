@@ -125,6 +125,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   display:flex;align-items:center;justify-content:space-between;
   font-size:.75rem;color:var(--muted);flex-shrink:0}
 .footer a{color:var(--water);text-decoration:none}
+
+.claude-opt{margin:.8rem 0 .2rem;border:1px solid var(--air);border-radius:var(--radius);padding:.55rem .8rem;background:var(--air-25)}
+.claude-opt summary{cursor:pointer;font-size:.8rem;font-weight:600;color:var(--muted)}
+.consent{display:flex;gap:.5rem;align-items:flex-start;font-size:.8rem;margin:.6rem 0 .2rem}
+.small-note{font-size:.75rem;color:var(--muted);margin:.35rem 0}
+.review-card{margin-top:1.1rem}
+.review-tools{display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.8rem;color:var(--muted);margin:.4rem 0 .8rem}
+.rv-section{margin:1rem 0 .3rem;font-size:.78rem;font-weight:700;color:var(--water);text-transform:uppercase;letter-spacing:.06em}
+.rv-row{display:grid;grid-template-columns:minmax(150px,210px) 1fr;gap:.25rem .8rem;padding:.55rem 0;border-top:1px solid #EEF3F2}
+.rv-term{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem;color:var(--text);word-break:break-all}
+.rv-assay{display:inline-block;margin-top:.2rem;font-family:inherit;font-size:.68rem;font-weight:700;background:var(--water-20);color:#1A3B8B;border-radius:100px;padding:.05rem .45rem}
+.rv-val textarea{width:100%;border:1.5px solid var(--air);border-radius:6px;padding:.35rem .5rem;font:inherit;font-size:.83rem;resize:vertical;min-height:2.1rem;background:#fff}
+.rv-val textarea.changed{border-color:var(--land);background:var(--land-20)}
+.rv-src{font-size:.74rem;color:var(--muted);margin-top:.25rem;line-height:1.45}
+.rv-src q{font-style:italic}
+.rv-src.none{color:#9A6B00}
+.rv-src.gen{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -146,12 +163,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   <div>
     <div class="hero">
       <h1>Fill a FAIRe metadata workbook from your report</h1>
-      <p>Runs in your browser — nothing is uploaded anywhere. The first visit downloads the Python engine (about 10 MB); after that the page works from your browser cache.</p>
+      <p>Runs in your browser — your report never leaves your computer. Read the report, check every value against the sentence it came from, then download the filled workbook. The first visit downloads the Python engine (about 10 MB).</p>
       <div class="badges">
         <span class="badge">projectMetadata</span>
         <span class="badge">sampleMetadata</span>
         <span class="badge">experimentRunMetadata</span>
-        <span class="badge b">Claude AI parsing</span>
+        <span class="badge b">Private: runs on your computer</span>
         <span class="badge e">DOC · DOCX · PDF · TXT</span>
       </div>
     </div>
@@ -195,17 +212,34 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         </div>
       </label>
 
-      <!-- API key -->
-      <div class="key-row">
-        <label for="apiKey">
-          Claude API key
-          <span class="opt-tag">optional — enables AI extraction</span>
-        </label>
-        <input id="apiKey" type="password" placeholder="sk-ant-…  (sent only to Anthropic, never stored)" autocomplete="off"/>
-      </div>
+      <!-- Optional: Claude (only for non-confidential reports) -->
+      <details class="claude-opt" id="claudeBox">
+        <summary>Advanced: let Claude read the report <span class="opt-tag">off · not for confidential reports</span></summary>
+        <label class="consent"><input type="checkbox" id="claudeConsent"/>
+          This report is <strong>not confidential</strong>. I agree to send its text to Anthropic's Claude API.</label>
+        <div class="key-row">
+          <input id="apiKey" type="password" placeholder="Claude API key (sk-ant-…) – used for this run only, never stored" autocomplete="off" disabled/>
+        </div>
+        <p class="small-note">Claude can read unusual layouts and other languages. Every value it returns must quote the report; values whose quote can't be found in the report are discarded. Leave this off and nothing leaves your computer.</p>
+      </details>
 
-      <button class="btn" id="runBtn">
-        <span>Fill metadata workbook</span>
+      <button class="btn" id="readBtn">
+        <span>Read report</span>
+        <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </button>
+    </div>
+
+    <div class="card review-card hidden" id="reviewCard">
+      <div class="card-label">Check the values</div>
+      <div id="reviewNotes" class="warn hidden"></div>
+      <p class="small-note" id="reviewSummary"></p>
+      <div class="review-tools">
+        <label><input type="checkbox" id="showEmpty"/> Show fields the report doesn't state</label>
+        <label><input type="checkbox" id="showGenerated"/> Show values set by the tool</label>
+      </div>
+      <div id="reviewBody"></div>
+      <button class="btn" id="fillBtn">
+        <span>Fill workbook with these values</span>
         <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       </button>
     </div>
@@ -246,8 +280,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         <li><strong>sampleMetadata</strong> — one row per sample &amp; field blank</li>
         <li><strong>experimentRunMetadata</strong> — one row per sample × assay</li>
       </ul>
-      <p>Anything the report doesn't state is entered as "missing: not provided" (FAIRe wording), so nothing is guessed.</p>
-      <p style="margin-top:.6rem"><strong>Without an API key</strong> the tool uses built-in pattern matching. <strong>With a Claude key</strong> it can also read unusual report layouts.</p>
+      <p>Every value shows the sentence it came from. Anything the report doesn't state is entered as "missing: not provided" (FAIRe wording), so nothing is guessed.</p>
+      <p style="margin-top:.6rem"><strong>Private by default:</strong> the built-in reader runs entirely in your browser. Claude is only used if you switch it on for a non-confidential report.</p>
     </div>
   </aside>
 </main>
@@ -263,28 +297,26 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script type="text/plain" id="faire-py">#!/usr/bin/env python3
 """
-FAIRe Metadata Filler.
+FAIRe Metadata Filler – fills the FAIRe eDNA metadata template from project reports.
 
-Reads an eDNA project report (.doc, .docx, .pdf, .txt), extracts methods and
-sampling metadata, and writes them into the FAIRe full template workbook.
+    python3 server.py                         # open the tool in your browser (served from this computer)
+    python3 server.py report.pdf              # fill the template from one report  -> outputs/
+    python3 server.py uploads/                # every report in a folder           -> outputs/
+    python3 server.py report.doc -t my_template.xlsx -o results/
 
-    python3 server.py            # web app at http://127.0.0.1:8787
+Each workbook comes with <name>_review.csv: every value and the report sentence it came from.
+Reports are read on this computer only.
 
-Environment variables
-    ANTHROPIC_API_KEY   enables Claude-assisted extraction (optional)
-    FAIRE_CLAUDE_MODEL  Claude model id (default: claude-haiku-5-5)
-    FAIRE_TOOL_HOST     bind address (default 127.0.0.1)
-    FAIRE_TOOL_PORT     port (default 8787)
-
-The same functions are used by the Colab notebook:
+The same functions are used by index.html (in the browser, via Pyodide) and the Colab notebook:
     extract_report_text(path) -> str
-    parse_report_regex(text)  -> metadata dict     (rule-based)
-    parse_with_claude(text, key) -> dict ; facts_from_claude(dict) -> metadata dict
+    parse_report_regex(text)  -> metadata dict
+    review_items(meta)        -> values + source sentences;  apply_review(meta, edits)
     fill_workbook(template, metadata, report_name, output) -> summary dict
+Optional, only for non-confidential reports: parse_with_claude(text, key) -> facts_from_claude(data, text)
 """
 from __future__ import annotations
 
-import html, json, os, re, shutil, struct, subprocess, tempfile, time, uuid, zipfile
+import html, json, os, re, shutil, struct, subprocess, tempfile, time, zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -292,7 +324,6 @@ from pathlib import Path
 from urllib.parse import unquote
 
 APP_DIR = Path(__file__).resolve().parent
-STATIC_DIR = APP_DIR / 'static'
 OUTPUT_DIR = APP_DIR / 'outputs'
 UPLOAD_DIR = APP_DIR / 'uploads'     # reserved for batch processing (multiple reports / a folder)
 
@@ -429,18 +460,36 @@ def _extract_docx(path: Path) -> str:
     return '\n'.join(out)
 
 
+PDF_NOTES: list = []      # pages that could not be read, reported to the user
+
+
 def _extract_pdf(path: Path) -> str:
+    """Text of a PDF, page by page. Pages too complex to read (e.g. huge vector figures) are skipped."""
+    PDF_NOTES.clear()
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except ImportError:
+        PdfReader = None
+    if PdfReader is not None:
+        reader = PdfReader(str(path))
+        pages, skipped = [], []
+        for n, page in enumerate(reader.pages, 1):
+            try:
+                pages.append(page.extract_text() or '')
+            except Exception:
+                skipped.append(n); pages.append('')
+        if skipped:
+            PDF_NOTES.append(f'PDF page(s) {", ".join(map(str, skipped))} could not be read (too complex, probably a figure) and were skipped')
+        return '\n'.join(pages)
     try:
         import pdfplumber  # type: ignore
         with pdfplumber.open(path) as pdf:
-            return '\n'.join(page.extract_text() or '' for page in pdf.pages)
+            out = []
+            for page in pdf.pages:
+                out.append(page.extract_text() or ''); page.close()
+            return '\n'.join(out)
     except ImportError:
-        pass
-    try:
-        from pypdf import PdfReader  # type: ignore
-        return '\n'.join(page.extract_text() or '' for page in PdfReader(str(path)).pages)
-    except ImportError:
-        raise ValueError('PDF support needs pdfplumber: pip install pdfplumber')
+        raise ValueError('PDF support needs pypdf: pip install pypdf')
 
 
 def _convert_with_office(path: Path):
@@ -458,6 +507,38 @@ def _convert_with_office(path: Path):
         if r.returncode == 0 and r.stdout: return r.stdout.decode('utf-8', errors='replace')
     return None
 
+
+
+_STOPWORDS = {
+    'en': ('English', 'the and of to in is were was with for that from by on this are using as'),
+    'fr': ('French', 'le la les des et du en est une dans pour par sur avec que qui au aux été sont'),
+    'de': ('German', 'der die das und den des ist mit von für auf im dem zu wurden wurde ein eine nicht'),
+    'es': ('Spanish', 'el la los las de y en del que con por para una se fue fueron como al'),
+    'it': ('Italian', 'il lo la gli le di e del della che con per sono stato una nel dei delle'),
+    'pt': ('Portuguese', 'o a os as de e do da dos das que com para em uma foi foram por no na'),
+    'nl': ('Dutch', 'de het een en van in is met voor op dat zijn werd werden door bij uit'),
+    'sv': ('Swedish', 'och att det som en är av för med till på den har var inte från'),
+    'da': ('Danish', 'og at det som en er af for med til på den har var ikke fra blev'),
+    'no': ('Norwegian', 'og at det som en er av for med til på den har var ikke fra ble'),
+    'fi': ('Finnish', 'ja on oli että ei se kun ovat olivat myös joka mukaan sekä'),
+    'pl': ('Polish', 'i w na z do że się jest nie to od przez dla oraz był były'),
+}
+
+
+def detect_language(text: str):
+    """Rough language guess from common words: returns (code, name). Runs locally."""
+    sample = text[:60000]
+    if len(re.findall(r'[぀-ヿ]', sample)) > 50: return 'ja', 'Japanese'
+    if len(re.findall(r'[一-鿿]', sample)) > 200: return 'zh', 'Chinese'
+    if len(re.findall(r'[Ѐ-ӿ]', sample)) > 200: return 'ru', 'Russian (Cyrillic)'
+    words = re.findall(r'[a-zà-ÿąćęłńóśźż]+', sample.lower())
+    if len(words) < 50: return 'en', 'English'
+    counts = {}
+    for w in words: counts[w] = counts.get(w, 0) + 1
+    scores = {code: sum(counts.get(w, 0) for w in sw.split()) for code, (_, sw) in _STOPWORDS.items()}
+    best = max(scores, key=scores.get)
+    if scores['en'] >= 0.6 * scores[best]: best = 'en'      # mixed text (e.g. English report with foreign references)
+    return best, _STOPWORDS[best][0]
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -596,17 +677,70 @@ def ref_for(citation: str, refs: list[str]):
 
 # ── main extractor ───────────────────────────────────────────────────────────
 
+def strip_line_numbers(text: str) -> str:
+    """Remove manuscript line numbers (bioRxiv / journal submissions number every line, at the end or the start)."""
+    lines = text.split('\n')
+    for where in ('end', 'start'):
+        pat = re.compile(r'(\d{1,4})\s*$') if where == 'end' else re.compile(r'^\s*(\d{1,4})(?=\s|$)')
+        found = [(i, int(m.group(1))) for i, l in enumerate(lines) if (m := pat.search(l))]
+        # line numbers form a long, almost continuous increasing run
+        run = sum(1 for (i1, a), (i2, b) in zip(found, found[1:]) if 0 < b - a <= 3)
+        if len(found) > 40 and run > 0.6 * len(found):
+            expected, out = None, []
+            for l in lines:
+                m = pat.search(l)
+                if m and (expected is None or expected - 2 <= int(m.group(1)) <= expected + 6):
+                    expected = int(m.group(1)) + 1
+                    l = (l[:m.start()] if where == 'end' else l[m.end():]).rstrip() if where == 'end' else l[m.end():]
+                out.append(l)
+            return '\n'.join(out)
+    return text
+
+
+HEADING = r'^\s*(?:\d+(?:\.\d+)*\.?\s*|[IVX]+\.\s*)?'
+METHODS_H = re.compile(HEADING + r'(?:MATERIALS? (?:AND|&) METHODS?|Materials? (?:and|&) [Mm]ethods?|METHODS?|Methods?|METHODOLOGY|Methodology|Experimental (?:design|procedures))\s*$', re.M)
+END_H = re.compile(HEADING + r'(?:RESULTS?(?: AND DISCUSSION)?|Results?(?: and [Dd]iscussion)?|DISCUSSION|Discussion|CONCLUSIONS?|Conclusions?|REFERENCES|References|ACKNOWLEDGE?MENTS?|Acknowledge?ments?)\s*$', re.M)
+
+
+def methods_text(text: str):
+    """The longest Methods section (heading to the next Results/Discussion/References heading), or None."""
+    best = None
+    for m in METHODS_H.finditer(text):
+        e = END_H.search(text, m.end())
+        span = text[m.end(): e.start() if e else len(text)]
+        if len(span) > 1500 and (best is None or len(span) > len(best)): best = span
+    return best
+
+
 def extract(text: str) -> dict:
     text = text.replace('\u00a0', ' ').replace('\ufeff', '')
+    text = strip_line_numbers(text)
     text = re.sub('[\ue000-\uf8ff]', '', text)                     # private-use glyphs (bullets)
     text = re.sub(r'(?<=[a-z])-\n(?=[a-z])', '-', text)              # "high-\nfidelity"
     refs = references(text)
-    cut = re.search(r'\n\s*(?:\d+\.\s*)?(?:\t)?References(?: to published material)?\s*\n', text)
+    cuts = [m for m in re.finditer(r'\n[ \t]*(?:\d+\.\s*)?(?:References(?: to published material)?|REFERENCES|Literature [Cc]ited|Bibliography)[ \t]*(?:\n|\t)', text)
+            if m.start() > 0.3 * len(text)]                 # skip a table of contents
+    cut = cuts[0] if cuts else None
     text = text[:cut.start()] if cut else text            # body only from here on
     text = text.replace('\u03bc', '\u00b5')                # Greek mu -> micro sign
     flat = norm(text)
     sents = sentences(text)
-    meta: dict = {'assays': [], 'sites': [], 'rounds': [], 'runs': [], 'notes': []}
+    _spans, _p = [], 0
+    for _s in sents:
+        _i = flat.find(_s, _p)
+        if _i >= 0: _spans.append((_i, _i + len(_s), _s)); _p = _i + len(_s)
+    evidence = {}
+
+    def at(pos):
+        for a0, a1, ss in _spans:
+            if a0 <= pos < a1: return ss
+        return flat[max(0, pos - 150): pos + 150]
+
+    def cite(key, src):
+        if src is None or key in evidence: return
+        evidence[key] = (src if isinstance(src, str) else at(src.start()))[:600]
+
+    meta: dict = {'assays': [], 'sites': [], 'rounds': [], 'runs': [], 'notes': [], '_evidence': evidence}
 
     # ── project ──────────────────────────────────────────────────────────────
     tm = re.search(r'Project title[ \t]*:?[ \t]*\n?((?:[ \t]*\S.*\n?){1,3})', text, re.I)
@@ -616,31 +750,40 @@ def extract(text: str) -> dict:
             if not norm(line) or re.match(r'\s*\d+\.', line) or re.match(r'\s*(Contractor|organisation)', line, re.I): break
             title_lines.append(norm(line))
     meta['project_title'] = ' '.join(title_lines) or find(r'^\s*(.{20,200})\n', text, flags=re.M)
+    cite('project_title', 'Project title: ' + meta['project_title'] if title_lines else meta['project_title'])
     org = after_label(text, r'organisation\(s\)') or after_label(text, r'Contractor')
     for acr, (name, ror) in INSTITUTIONS.items():
         if (org and acr in org) or re.search(r'\b' + acr + r'\b', flat):
             meta['institution'], meta['institution_ror'] = name, ror
+            cite('institution', (f'Contractor organisation(s): {org}' if org and acr in org else at(re.search(r'\b' + acr + r'\b', flat).start())))
             break
     else:
         meta['institution'] = org
     meta['start_date'] = parse_date(after_label(text, r'start date') or '')
+    if meta['start_date']: cite('start_date', 'start date: ' + (after_label(text, r'start date') or ''))
     meta['end_date'] = parse_date(after_label(text, r'end date') or '')
     if re.search(r'\bDefra\b', flat): meta['funder'] = 'Defra'
 
     # ── controls ─────────────────────────────────────────────────────────────
     fb = re.search(r'(\w+) field blanks? .{0,80}?(?:per|for each) (?:lake|site|pond|river|location)', flat, re.I)
     meta['field_blanks_per_site_round'] = num_word(fb.group(1)) if fb else (1 if re.search(r'field blank', flat, re.I) else 0)
+    cite('field_blanks', fb or re.search(r'field blank', flat, re.I))
     eb = re.search(r'(\w+) extraction (?:blanks?|negatives?|controls?) were included', flat, re.I)
     meta['extraction_blanks'] = num_word(eb.group(1)) if eb else 0
+    cite('extraction_blanks', eb)
     pb = re.search(r'(\w+) PCR (?:blanks?|negatives?) were included for each primer pair', flat, re.I)
     meta['pcr_negatives_per_assay'] = num_word(pb.group(1)) if pb else 0
+    cite('pcr_negatives', pb)
     meta['neg_controls'] = bool(meta['field_blanks_per_site_round'] or meta['extraction_blanks'] or
                                 meta['pcr_negatives_per_assay'] or re.search(r'negative control', flat, re.I))
     meta['pos_controls'] = bool(re.search(r'positive control|mock communit', flat, re.I))
+    cite('neg_controls', fb or eb or pb or re.search(r'negative control', flat, re.I))
+    cite('pos_controls', re.search(r'positive control|mock communit', flat, re.I))
 
     # ── sterilisation ────────────────────────────────────────────────────────
     st = [s for s in sents if re.search(r'UV[- ]steril|bleach|sterile scalpel|decontaminat|DNA[- ]?away', s, re.I)]
     meta['sterilise_method'] = ' '.join(st[:2]) or None
+    cite('sterilise_method', meta['sterilise_method'])
 
     # ── sampling design ──────────────────────────────────────────────────────
     sm = re.search(r'(\w+)\s+(\d+(?:\.\d+)?)\s*(L|mL|ml|litre|liter)s?\s+water samples', flat, re.I)
@@ -648,6 +791,7 @@ def extract(text: str) -> dict:
         meta['samples_per_site_round'] = num_word(sm.group(1))
         meta['samp_size'] = sm.group(2)
         meta['samp_size_unit'] = 'L' if sm.group(3).lower() in ('l', 'litre', 'liter') else 'mL'
+        for _k in ('samples_per_site_round', 'samp_size', 'samp_size_unit', 'samp_collect_method'): cite(_k, sm)
     sub = re.search(r'(\d+)\s*[x×]\s*(\d+)\s*m[lL]\s+subsamples', flat)
     if sub: meta['subsamples'] = f'{sub.group(1)} x {sub.group(2)} mL subsamples'
     where = find(r'collected from the (shoreline|shore|littoral zone|centre|center|deepest point|surface)', flat)
@@ -658,14 +802,22 @@ def extract(text: str) -> dict:
     meta['samp_collect_method'] = ', '.join(parts) or None
 
     # habitat → ENVO
-    if re.search(r'\blakes?\b|\btarns?\b|still waters|lentic', flat, re.I):
-        meta['env_broad_scale'] = 'freshwater lake biome [ENVO:01000252]'
-        meta['env_local_scale'] = 'lake [ENVO:00000020]'
-        meta['env_medium'] = 'fresh water [ENVO:00002011]'
-    elif re.search(r'\bponds?\b', flat, re.I):
-        meta['env_broad_scale'] = 'aquatic biome [ENVO:00002030]'
-        meta['env_local_scale'] = 'pond water [ENVO:00002228]'
-        meta['env_medium'] = 'liquid water [ENVO:00002006]'
+    HABITATS = [  # (words, broad, local, medium)
+        (r'\blakes?\b|\btarns?\b|\blochs?\b|still waters?|lentic|reservoirs?', 'freshwater lake biome [ENVO:01000252]', 'lake [ENVO:00000020]', 'fresh water [ENVO:00002011]'),
+        (r'\bponds?\b', 'aquatic biome [ENVO:00002030]', 'pond water [ENVO:00002228]', 'liquid water [ENVO:00002006]'),
+        (r'\brivers?\b|\bstreams?\b|riverine|lotic', None, None, 'river water [ENVO:01000599]'),
+        (r'\bseawater\b|sea water|\bocean\w*|\bmarine\b|offshore|\bcoastal\b', 'marine biome [ENVO:00000447]', 'marine pelagic zone [ENVO:00000208]', 'sea water [ENVO:00002149]'),
+        (r'Continuous Plankton Recorder|plankton (?:net|tow|samples)', 'marine biome [ENVO:00000447]', None, 'planktonic material [ENVO:01000063]'),
+    ]
+    hab_counts = [(len(re.findall(p, flat, re.I)) * (10 if 'Plankton' in p else 1), (p, b, l, m)) for p, b, l, m in HABITATS]
+    hab_counts.sort(key=lambda x: -x[0])
+    if hab_counts[0][0] >= 3:
+        p, b, l, m = hab_counts[0][1]
+        if re.search(r'sediment cores?|sedimentary|\bsedDNA\b', flat, re.I) and len(re.findall(r'sediment', flat, re.I)) > hab_counts[0][0]:
+            b, l, m = (b, l, 'marine sediment [ENVO:03000033]') if 'marine' in (b or '') else (b, l, 'lake sediment [ENVO:00000546]')
+        hm = re.search(p, flat, re.I)
+        for _k, _v in (('env_broad_scale', b), ('env_local_scale', l), ('env_medium', m)):
+            if _v: meta[_k] = _v; cite(_k, hm)
     meta['habitat_natural'] = not re.search(r'mesocosm|aquari|tank experiment', flat, re.I)
 
     # country / region
@@ -703,9 +855,22 @@ def extract(text: str) -> dict:
                 meta['sites'] = [{'name': nm, 'code': code, 'attributes': ' '.join(t[:k])}
                                  for nm, (_, code, t) in zip(names, rows)]
 
+    if not meta['sites']:   # one cell per line, rows separated by blank lines: "Name\nCODE\nv1\n…\n\n"
+        blocks = [b.split('\n') for b in re.split(r'\n[ \t]*\n', text)]
+        run = []
+        for b in blocks + [[]]:
+            b = [x.strip() for x in b if x.strip()]
+            ok = len(b) >= 3 and re.fullmatch(r'[A-Z][A-Za-z\' ]{2,40}', b[0]) and re.fullmatch(r'[A-Z]{3,5}', b[1]) and all(len(x) < 60 for x in b)
+            if ok and (not run or len(b) == len(run[0])): run.append(b); continue
+            if len(run) >= 3: break
+            run = [b] if ok else []
+        if len(run) >= 3 and len({b[1] for b in run}) == len(run):
+            meta['sites'] = [{'name': b[0], 'code': b[1], 'attributes': ' '.join(b[2:])} for b in run]
+
     # sampling rounds: "weeks commencing 14th July and 13th October 2025"
     wc = re.search(r'weeks? commencing ((?:\d{1,2}(?:st|nd|rd|th)?\s+' + MONTH_RE + r'(?:\s+\d{4})?(?:,\s*|\s+and\s+)?)+)', flat, re.I)
     if wc:
+        cite('rounds', wc)
         year = find(r'(\d{4})', wc.group(1)) or find(r'commencing.{0,60}?(\d{4})', flat)
         for i, d in enumerate(re.findall(r'\d{1,2}(?:st|nd|rd|th)?\s+' + MONTH_RE, wc.group(1), re.I)):
             iso = parse_date(d, int(year) if year else None)
@@ -730,29 +895,39 @@ def extract(text: str) -> dict:
     fl = re.search(r'(\d+)\s*mm diameter\s*(\d+(?:\.\d+)?)\s*[µu]m?\s*([a-z ]+?)\s+filters', flat, re.I)
     if fl:
         meta['filter_diameter'], meta['size_frac'], meta['filter_material'] = fl.group(1), fl.group(2), norm(fl.group(3))
+        for _k in ('filter_diameter', 'size_frac', 'filter_material'): cite(_k, fl)
     meta['filter_active'] = bool(re.search(r'vacuum|peristaltic|pump', flat, re.I))
+    cite('filter_active', re.search(r'vacuum|peristaltic|pump', flat, re.I))
     proc = [s for s in sents if re.search(r'filter(ed|ing)? within|filters were used per sample|Filtering was stopped', s, re.I)]
     meta['samp_mat_process'] = ' '.join(proc[:3]) or None
+    cite('samp_mat_process', meta['samp_mat_process'])
     within = re.search(r'filtered within (\d+)\s*(hours?|h|days?)', flat, re.I)
     if within: meta['samp_store_dur'] = f'PT{within.group(1)}H' if within.group(2).lower().startswith('h') else f'P{within.group(1)}D'
+    cite('samp_store_dur', within); cite('samp_store_method_additional', re.search(r'transported on ice', flat, re.I))
     if re.search(r'transported on ice', flat, re.I): meta['samp_store_method_additional'] = 'Transported on ice; ' + (f'filtered within {within.group(1)} {within.group(2)}' if within else '')
     sl = re.search(r'transported on ice to ([A-Z][\w ]+?) and', flat)
     if sl: meta['samp_store_loc'] = sl.group(1)
+    cite('samp_store_loc', sl)
     sol = re.search(r'containing\s+(?:\d+\s*m[lL]\s+)?(DNA/RNA Shield|ethanol|Longmire\'?s?(?: buffer)?|ATL buffer|RNAlater)\s*(\([^)]+\))?', flat, re.I)
     if sol: meta['prepped_samp_store_sol'] = norm(sol.group(1) + ' ' + (sol.group(2) or ''))
+    cite('prepped_samp_store_sol', sol)
     tmp = re.search(r'(?:stored|frozen) at (-?\d+)\s*°?\s*C', flat, re.I)
     if tmp: meta['prepped_samp_store_temp'] = tmp.group(1)
+    cite('prepped_samp_store_temp', tmp)
 
     # ── extraction ───────────────────────────────────────────────────────────
     kit = re.search(r'performed using ([A-Z][^()]{3,80}?Kit)\s*\(([^)]+)\)', flat)
     if kit: meta['ext_kit'] = f'{kit.group(1)} ({kit.group(2)})'
+    cite('ext_kit', kit); cite('ext_sep', kit)
     sop = re.search(r'follow those outlined in ([A-Z][\w\-]+ et al\.? \(\d{4}\))', flat)
     if sop:
         meta['nucl_acid_ext'] = ref_for(sop.group(1).replace('(', '').replace(')', ''), refs)
+        cite('nucl_acid_ext', sop); cite('nucl_acid_amp', sop)
         if re.search(r'(?:metabarcoding|PCR|amplification) conditions follow', flat, re.I):
             meta['nucl_acid_amp'] = meta['nucl_acid_ext']
     lys = [s for s in sents if re.search(r'mechanical lysis|bead[- ]beat|homogeni[sz]er|Proteinase K', s, re.I)]
     meta['ext_lysis'] = ' '.join(lys[:2]) or None
+    cite('ext_lysis', meta['ext_lysis'])
     kitname = meta.get('ext_kit') or ''
     if re.search(r'DNeasy|Power(?:Water|Soil|Max)|Quick-DNA|NucleoSpin|QIAamp|E\.Z\.N\.A|Monarch', kitname, re.I):
         meta['ext_sep'] = 'column-based'
@@ -760,8 +935,10 @@ def extract(text: str) -> dict:
         meta['ext_sep'] = 'magnetic beads'
     mod = re.search(r'with the following amendments.*?(?=Thereafter|DNA extraction was verified)', flat, re.I)
     if mod: meta['ext_modifications'] = norm(re.sub(r'^with the following amendments[^.]*\.\s*', '', mod.group(0)))[:600]
+    cite('ext_modifications', meta.get('ext_modifications'))
     conc = [s for s in sents if re.search(r'Qubit|Nanodrop|NanoDrop|fluorometer', s) and 'librar' not in s.lower()]
     meta['conc_method'] = conc[0] if conc else None
+    cite('conc_method', meta['conc_method'])
     nm = re.search(r'normalised to (?:a standard template concentration of )?(\d+(?:\.\d+)?\s*ng/[µu]L)', flat, re.I)
     if nm: meta['notes'].append(f'Sample DNA normalised to {nm.group(1)} before PCR')
 
@@ -769,8 +946,8 @@ def extract(text: str) -> dict:
     REJECT = r'(?:instead of|rather than|in preference to|as opposed to|alternatives? such as|compared with)\s+'
     accepted = norm(re.sub(REJECT + r'(?:the\s+)?[\w/\-]+', ' ', flat, flags=re.I))
     counts = {}
-    for mk in markers_in(accepted):
-        counts[mk] = len(re.findall(r'(?<![A-Za-z0-9])' + mk + r'(?![A-Za-z0-9])', accepted, re.I))
+    for raw in re.findall(r'(?<![A-Za-z0-9])' + MARKER_RE + r'(?![A-Za-z0-9])', accepted):   # case-sensitive: 'its' is not ITS
+        counts[canon_marker(raw)] = counts.get(canon_marker(raw), 0) + 1
     seen_markers = [m for m, n in counts.items() if n >= 3]
     cap = re.findall(r'\([a-h]\)\s*(' + MARKER_RE + r')\b', flat)
     order = [canon_marker(m) for m in cap] or MARKERS
@@ -782,6 +959,8 @@ def extract(text: str) -> dict:
             n = len(re.findall(r'(?<![A-Za-z0-9])' + mk + r'\)?\s+(?:' + pat + r')\b', flat, re.I))
             if n: counts[taxon] = counts.get(taxon, 0) + n
         if counts: taxa_for[mk] = max(counts, key=counts.get)
+        _tm = re.search(r'(?<![A-Za-z0-9])' + mk + r'\)?\s+(?:' + '|'.join(p for p, _ in TAXON_WORDS) + r')\b', flat, re.I)
+        if _tm: cite(f'{mk}.targetTaxonomicAssay', _tm); cite(f'{mk}.targetTaxonomicScope', _tm)
     marker_for_taxon = {v: k for k, v in taxa_for.items()}
 
     scope_word = {}
@@ -808,11 +987,13 @@ def extract(text: str) -> dict:
         if mk in assays:
             a = assays[mk]
             a['primer_name_fwd'], a['primer_name_rev'] = pm.group(1), pm.group(2)
+            for _k in ('primer_name_fwd', 'primer_name_rev', 'assay_name'): cite(f'{mk}.{_k}', s)
             ref = re.search(r'primers?(?:\s+[\w\-]+\s*(?:and|/)\s*[\w\-]+)?\s+of ([A-Z][\w\-]+ et al\.?,? \(?\d{4}\)?)', main) or \
                   re.search(r'([\w\-]+)\s*/\s*([\w\-]+)\s+primers? of ([A-Z][\w\-]+ et al\.?,? \(?\d{4}\)?)', main)
             if ref:
                 full = ref_for(ref.group(ref.lastindex).replace('(', '').replace(')', '').replace(',', ''), refs)
                 a['primer_ref_fwd'] = a['primer_ref_rev'] = full
+                cite(f'{mk}.primer_ref_fwd', s); cite(f'{mk}.primer_ref_rev', s)
     for mk, a in assays.items():
         fwd, rev = a.get('primer_name_fwd'), a.get('primer_name_rev')
         a['assay_name'] = f'{mk}_{fwd}-{rev}' if fwd and rev else mk
@@ -834,70 +1015,81 @@ def extract(text: str) -> dict:
             mf = re.search(re.escape(m.group(1)) + r'\s*\(([^)]+)\)', joined)
             a['commercial_mm'] = norm(m.group(1)) + (f' ({mf.group(1)})' if mf else '')
         a['custom_mm'] = ss[0][:500]
+        cite(f'{mk}.custom_mm', ss[0]); cite(f'{mk}.commercial_mm', ' '.join(ss)[:600] if m else None)
         dna = re.search(r'(\d+(?:\.\d+)?)\s*[µu]L\s*(?:of\s+)?template DNA', joined)
         if dna: a['pcr_dna_vol'] = dna.group(1)
+        if dna: cite(f'{mk}.pcr_dna_vol', next((x for x in ss if dna.group(0) in x), None))
         recipe = next((x for x in ss if re.search(r'contained|combined with|consisted of|comprised', x, re.I)), ss[0])
         vols = [float(v) for v in re.findall(r'(\d+(?:\.\d+)?)\s*[µu]L', recipe)]
         each = re.search(r'(\d+(?:\.\d+)?)\s*[µu]L\s*(?:of\s*)?(?:(?:\d+\s*[µu]?M|\d+\s*mM)\s*)?(?:of )?each', recipe)
         total = sum(vols) + (float(each.group(1)) if each else 0)   # "each" primer counted twice
         if dna and dna.group(0) not in recipe: total += float(dna.group(1))
         if vols: a['amplificationReactionVolume'] = f'{total:g}'
+        if vols: cite(f'{mk}.amplificationReactionVolume', ' '.join(ss)[:600])
         pv = re.search(r'(\d+(?:\.\d+)?)\s*[µu]L\s*(?:of\s*)?(?:each\s*)?(\d+)\s*[µu]M\s*(?:of\s*)?(?:each\s*)?forward', recipe) or \
              re.search(r'(\d+(?:\.\d+)?)\s*[µu]L\s*of each\s*(\d+)\s*[µu]M', recipe)
         if pv: a['pcr_primer_vol'], a['pcr_primer_conc'] = pv.group(1), pv.group(2)
+        if pv: cite(f'{mk}.pcr_primer_vol', recipe); cite(f'{mk}.pcr_primer_conc', recipe)
         elif re.search(r'\d+\s*mM\s*of each forward', recipe):
             meta['notes'].append(f'{mk}: primer stock concentration is reported in mM (likely µM) – please check')
     # PCR replicates
-    if re.search(r'single reactions|single PCR|one PCR replicate|without (?:PCR )?replication', flat, re.I): rep = '1'
+    _rp = re.search(r'single reactions|single PCR|one PCR replicate|without (?:PCR )?replication', flat, re.I)
+    if _rp: rep = '1'
     else:
         rm = re.search(r'(\w+) PCR replicates (?:were|per)', flat, re.I) or re.search(r'in (duplicate|triplicate)', flat, re.I)
         rep = {'duplicate': '2', 'triplicate': '3'}.get(rm.group(1).lower(), str(num_word(rm.group(1)) or '')) if rm else None
     an = re.search(r'anneal\w*\s+(?:at\s+)?(\d{2}(?:\.\d)?)\s*°\s*C', flat, re.I)
     cy = re.search(r'(\d{2})\s+cycles\b(?! for)', flat, re.I)
     for a in assays.values():
-        if rep: a['pcr_rep'] = rep
-        if an: a['annealingTemp'] = an.group(1)
-        if cy: a['pcr_cycles'] = cy.group(1)
+        if rep: a['pcr_rep'] = rep; cite(f"{a['marker']}.pcr_rep", _rp or (rm if not _rp else None))
     if re.search(r'thermocycling (?:parameters|conditions) are (?:described|given|shown) in Table', flat, re.I):
         meta['notes'].append('Thermocycling conditions and primer sequences are in a report table that is not part of the text – please add them manually')
 
     # ── library prep / sequencing ────────────────────────────────────────────
-    if re.search(r'two[- ]step', flat, re.I): meta['barcoding_pcr_appr'] = 'two-step PCR'
+    if re.search(r'two[- ]step', flat, re.I): meta['barcoding_pcr_appr'] = 'two-step PCR'; cite('barcoding_pcr_appr', re.search(r'two[- ]step', flat, re.I))
     elif re.search(r'one[- ]step|single[- ]step', flat, re.I): meta['barcoding_pcr_appr'] = 'one-step PCR'
     elif re.search(r'ligation', flat, re.I): meta['barcoding_pcr_appr'] = 'ligation-based'
     ad = re.search(r'forward adaptor:\s*5\W{0,2}-\s?([ACGTN]+)\s?-3\W{0,2},\s*reverse adaptor:\s*5\W{0,2}-\s?([ACGTN]+)\s?-3', flat)
     if ad: meta['adapter_forward'], meta['adapter_reverse'] = ad.group(1), ad.group(2)
+    cite('adapter_forward', ad); cite('adapter_reverse', ad)
     ad2 = list(re.finditer(r'forward adaptor:\s*5\W{0,2}-\s?([ACGTN]+)\s?-3\W{0,2},\s*reverse adaptor:\s*5\W{0,2}-\s?([ACGTN]+)\s?-3', flat))
-    if len(ad2) > 1: meta['notes'].append(f'Indexing (step II) adaptors: forward {ad2[1].group(1)}, reverse {ad2[1].group(2)}')
+    if len(ad2) > 1: meta['notes'].append(f'Indexing (step II) adaptors: forward {ad2[1].group(1)}, reverse {ad2[1].group(2)}'); cite('seq_method_additional', ad2[1])
     p2 = re.search(r'Per sample (\d+(?:\.\d+)?)\s*[µu]L of step 1 product.*?to a total of (\d+(?:\.\d+)?)\s*[µu]L', flat, re.I)
     if p2:
         meta['pcr2_dna_vol'], meta['pcr2_amplificationReactionVolume'] = p2.group(1), p2.group(2)
         m = re.search(mm_re, p2.group(0), re.I)
         if m: meta['pcr2_commercial_mm'] = norm(m.group(1))
         meta['pcr2_custom_mm'] = norm(p2.group(0))
+        for _k in ('pcr2_dna_vol', 'pcr2_amplificationReactionVolume', 'pcr2_commercial_mm', 'pcr2_custom_mm'): cite(_k, p2)
     lq = re.search(r'libraries were quantified using (?:a |an )?([^.,;]+?)(?: and | to |,|\.)', flat, re.I)
     if lq: meta['lib_conc_meth'] = norm(lq.group(1))
+    cite('lib_conc_meth', lq)
     lib = [s for s in sents if re.search(r'librar(y|ies)', s, re.I) and re.search(r'Qubit|quantif|normali[sz]|gel purif|Bioanalyzer|TapeStation', s)]
     meta['lib_screen'] = ' '.join(lib[:3]) or None
+    cite('lib_screen', meta['lib_screen'])
     ph = re.search(r'(\d+(?:\.\d+)?)\s*%\s*(?:addition of\s*)?(?:[\w ]{0,30})PhiX', flat, re.I)
     if ph: meta['phix_perc'] = ph.group(1)
-    if re.search(r'\bIllumina\b', flat): meta['platform'] = 'ILLUMINA'
+    cite('phix_perc', ph)
+    if re.search(r'\bIllumina\b', flat): meta['platform'] = 'ILLUMINA'; cite('platform', re.search(r'\bIllumina\b', flat))
     elif re.search(r'Nanopore|MinION|GridION|PromethION', flat): meta['platform'] = 'OXFORD_NANOPORE'
     elif re.search(r'PacBio', flat): meta['platform'] = 'PACBIO_SMRT'
     ins = re.search(r'Illumina (NextSeq|MiSeq|NovaSeq|HiSeq|iSeq)\b', flat) or re.search(r'\b(NextSeq|MiSeq|NovaSeq|HiSeq|iSeq|MinION|GridION|PromethION)(?:™)?\s*(\d+(?:/\d+)?)?', flat)
     if ins:
-        model = re.search(r'(NextSeq|MiSeq|NovaSeq|HiSeq|iSeq)(?:™)?\s*(\d+(?:/\d+)?)', flat)
+        model = re.search(r'(NextSeq|NovaSeq|HiSeq|iSeq)(?:™)?\s*(500|550|1000/2000|1000|2000|2500|3000|4000|6000|100)\b', flat)
         meta['instrument'] = ('Illumina ' if meta.get('platform') == 'ILLUMINA' else '') + (f'{model.group(1)} {model.group(2)}' if model else ins.group(1))
-    if re.search(r'paired[- ]end|mergePairs|forward and reverse reads', flat, re.I): meta['lib_layout'] = 'paired end'
+        cite('instrument', model or ins)
+    _pe = re.search(r'paired[- ]end|mergePairs|forward and reverse reads', flat, re.I)
+    if _pe: meta['lib_layout'] = 'paired end'; cite('lib_layout', _pe)
     loc = re.search(r'to ([A-Z][\w ]+?) \([^)]*\) for DNA extraction and sequencing|to ([A-Z][\w ]+?) for (?:DNA extraction and )?sequencing', flat)
     if loc: meta['sequencing_location'] = norm(loc.group(1) or loc.group(2))
+    cite('sequencing_location', loc)
     # kit per assay: "<kit> 600 Cycles for pooled 16S,18S, rbcL and COI, and 200 Cycles for 12S"
     kb = re.search(r'((?:NextSeq|MiSeq|NovaSeq)(?:(?!NextSeq|MiSeq|NovaSeq)[^.])*?)\s*(\d+)\s*Cycles for', flat)
     if kb:
         base = norm(re.sub(r'Chemistry', '', kb.group(1))).replace('™', '')
         for cyc, mlist in re.findall(r'(\d+)\s*Cycles for (?:pooled\s*)?((?:' + MARKER_RE + r'[\s,]*(?:and\s+)?)+)', flat):
             for mk in markers_in(mlist):
-                if mk in assays: assays[mk]['seq_kit'] = f'{base} {cyc} cycles'
+                if mk in assays: assays[mk]['seq_kit'] = f'{base} {cyc} cycles'; cite(f'{mk}.seq_kit', kb)
     # runs: dates in order, run descriptions in order
     rd = re.search(r'(?:Sequenc\w* runs? (?:were|was) completed[^.]*? on|runs? on)\s*([\d/]+(?:\s*(?:and|,)\s*[\d/]+)*)', flat, re.I)
     rdesc = re.findall(r'(\d+)\s*cycle run \(((?:' + MARKER_RE + r'[\s,]*(?:and\s+)?)+)\)', flat, re.I)
@@ -907,13 +1099,17 @@ def extract(text: str) -> dict:
             cyc, mlist = rdesc[i] if i < len(rdesc) else ('', '')
             mks = markers_in(mlist) if mlist else list(assays)
             meta['runs'].append({'seq_run_id': f'run_{d.replace("-", "")}' + (f'_{cyc}cycle' if cyc else ''), 'date': d, 'assays': mks})
+        cite('runs', rd)
 
     # ── bioinformatics ───────────────────────────────────────────────────────
     cut = re.search(r'cutadapt\s*\((v?[\d.]+)', flat, re.I) or re.search(r'cutadapt\s*(v?[\d.]+)?', flat, re.I)
     if cut: meta['trim_method'] = 'cutadapt' + (f' {cut.group(1)}' if cut.group(1) else '')
+    cite('trim_method', cut)
     if re.search(r'DADA2', flat):
         rv = find(r'\bin R\s*v?\.?\s*([\d.]+\d)', flat)
         meta['sop_bioinformatics'] = 'DADA2 pipeline (Callahan et al. 2016)' + (f' in R v{rv}' if rv else '')
+        cite('sop_bioinformatics', re.search(r'DADA2', flat)); cite('otu_clust_tool', re.search(r'DADA2', flat))
+        cite('error_rate_tool', re.search(r'maxEE', flat)); cite('merge_tool', re.search(r'mergePairs', flat)); cite('otu_clust_cutoff', re.search(r'DADA2', flat))
         meta['error_rate_tool'] = 'DADA2 filterAndTrim' if re.search(r'maxEE', flat) else None
         if re.search(r'mergePairs', flat): meta['merge_tool'] = 'DADA2 mergePairs'
         meta['otu_clust_tool'] = 'DADA2 (amplicon sequence variants, no clustering)'
@@ -922,6 +1118,7 @@ def extract(text: str) -> dict:
     if ee:
         meta['error_rate_type'] = 'expected error rate'
         meta['error_rate_cutoff'] = ee.group(1)
+        cite('error_rate_type', ee); cite('error_rate_cutoff', ee)
     trims = {}
     for m in re.finditer(r'((?:' + MARKER_RE + r'[\s,&]*(?:and\s+)?)+)amplicon reads (?:were|both)[^.]*?trimmed to (\d+)(?: and (\d+))? bases', flat):
         for mk in markers_in(m.group(1)): trims[mk] = (m.group(2), m.group(3) or m.group(2))
@@ -934,8 +1131,10 @@ def extract(text: str) -> dict:
         if maxn is not None: bits.append(f'maxN = {maxn}')
         if ee: bits.append(f'maxEE = {ee.group(1)} (forward)' + (f', {ee.group(2)} (reverse)' if ee.group(2) else ''))
         if bits: a['trim_param'] = '; '.join(bits)
+        if bits: cite(f'{mk}.trim_param', ' '.join(x for x in [at(m2.start()) for m2 in re.finditer(r'trimmed to|maxEE', flat)][:2]))
     if re.search(r'removeBimeraDenovo', flat):
         meta['chimera_check_method'] = 'DADA2 removeBimeraDenovo'
+        cite('chimera_check_method', re.search(r'removeBimeraDenovo', flat)); cite('chimera_check_param', re.search(r'removeBimeraDenovo', flat))
         if re.search(r'removeBimeraDenovo default', flat, re.I): meta['chimera_check_param'] = 'default settings'
     # taxonomy: global method + per-marker overrides and databases
     bio = re.search(r'Bioinformatic analysis(.*?)(?:Statistical analysis|Results)', flat, re.S | re.I)
@@ -953,18 +1152,19 @@ def extract(text: str) -> dict:
         # "Prokaryotes (16S), Silva v138.2 ... Eukaryotes (18S) PR2 V 5.0.1"
         for m in re.finditer(r'\((' + MARKER_RE + r')\),?\s*' + db_re, s):
             mk = canon_marker(m.group(1))
-            if mk in assays: assays[mk].setdefault('dbs', []).append(norm(m.group(2)))
+            if mk in assays: assays[mk].setdefault('dbs', []).append(norm(m.group(2))); cite(f'{mk}.otu_db', s)
         if fm:
             for d in re.findall(db_re, s):
                 for mk in scope:
-                    if mk in assays: assays[mk].setdefault('dbs', []).append(norm(d))
+                    if mk in assays: assays[mk].setdefault('dbs', []).append(norm(d)); cite(f'{mk}.otu_db', s)
             if re.search(r'SINTAX', s):
+                for mk in scope: cite(f'{mk}.otu_seq_comp_appr', s)
                 for mk in scope:
                     if mk in assays: assays[mk]['otu_seq_comp_appr'] = 'SINTAX (Edgar 2016)'
         elif scope and not re.match(r'(?:ASVs|Primer|Sequences|Reference)', s):
             for d in re.findall(db_re, s):
                 for mk in scope:
-                    if mk in assays: assays[mk].setdefault('dbs', []).append(norm(d))
+                    if mk in assays: assays[mk].setdefault('dbs', []).append(norm(d)); cite(f'{mk}.otu_db', s)
             if re.search(r'BLAST', s):
                 for mk in scope:
                     if mk in assays: assays[mk]['blast_note'] = norm(s)
@@ -988,10 +1188,11 @@ def extract(text: str) -> dict:
             if d not in dbs: dbs.append(d)
         if dbs: a['otu_db'] = ' | '.join(dbs)
         a.setdefault('otu_seq_comp_appr', global_method)
+        cite(f"{mk}.otu_seq_comp_appr", re.search(r'assignTaxonomy', flat)); cite(f"{mk}.tax_assign_cat", evidence.get(f"{mk}.otu_seq_comp_appr"))
         if a.get('otu_seq_comp_appr'):
             a['tax_assign_cat'] = 'sequence composition'
         if a.pop('blast_note', None):
-            a['otu_seq_comp_appr'] += '; BLAST against NCBI for confirmation of selected taxa'
+            a['otu_seq_comp_appr'] = ((a.get('otu_seq_comp_appr') + '; ') if a.get('otu_seq_comp_appr') else '') + 'BLAST against NCBI for confirmation of selected taxa'
     # rarefaction depths
     rare = re.search(r'rarefaction to (.*?) using', flat, re.I)
     if rare:
@@ -999,6 +1200,7 @@ def extract(text: str) -> dict:
             mk = canon_marker(mk)
             if mk in assays:
                 assays[mk]['otu_final_description'] = f'ASV table rarefied to {n} reads per sample' + (' (rarefy_even_depth, phyloseq)' if 'phyloseq' in flat else '')
+                cite(f'{mk}.otu_final_description', rare)
     raw_bits = []
     if meta.get('trim_method'): raw_bits.append(f'primers removed with {meta["trim_method"]}')
     if re.search(r'quality filter', flat, re.I): raw_bits.append('quality filtering')
@@ -1006,14 +1208,269 @@ def extract(text: str) -> dict:
     if meta.get('merge_tool'): raw_bits.append('merging of paired reads')
     if meta.get('chimera_check_method'): raw_bits.append('chimera removal')
     if raw_bits: meta['otu_raw_description'] = 'ASV table after ' + ', '.join(raw_bits) + (' (DADA2)' if 'DADA2' in flat else '')
+    cite('otu_raw_description', re.search(r'DADA2', flat))
     cont = [s for s in sents if re.search(r'blanks?', s, re.I) and re.search(r'contaminat|not reliable|mis-?binning', s, re.I)]
     if cont: meta['screen_contam_method'] = ' '.join(cont[:2])[:700]
+    cite('screen_contam_method', meta.get('screen_contam_method'))
     stats = [p for p in ('phyloseq', 'vegan', 'microeco', 'lme4', 'emmeans', 'ggplot2') if re.search(r'\b' + p, flat)]
     if stats: meta['bioinfo_method_additional'] = 'Downstream analysis in R using ' + ', '.join(stats)
+    cite('bioinfo_method_additional', re.search(r'\b' + stats[0], flat) if stats else None)
 
+    # ── general patterns for other report / paper styles ─────────────────────
+    # Runs after the specific rules above and only fills what is still empty
+    # (except PCR cycling, which is assigned per assay here).
+    mtext = methods_text(text)
+    fl = norm(mtext or text).replace('\u2212', '-').replace('μ', 'µ')
+    fsents = [x.replace('\u2212', '-').replace('μ', 'µ') for x in (sentences(mtext) if mtext else sents)]
+    one_assay = list(assays)[0] if len(assays) == 1 else None
+
+    def put(key, value, src):
+        if value not in (None, '') and not meta.get(key):
+            meta[key] = value; cite(key, src)
+
+    def put_a(mk, key, value, src, override=False):
+        a = assays.get(mk)
+        if a is None or value in (None, ''): return
+        if override or not a.get(key):
+            a[key] = value; evidence.pop(f'{mk}.{key}', None); cite(f'{mk}.{key}', src)
+
+    def segments(sentence):
+        """'16S … 25 cycles … 18S … 35 cycles' -> [('16S', '16S … 25 cycles …'), ('18S', '18S … 35 cycles')]."""
+        hits = [(m.start(), canon_marker(m.group(0))) for m in re.finditer(r'(?<![A-Za-z0-9])' + MARKER_RE + r'(?![A-Za-z0-9])', sentence)]
+        hits = [(p, mk) for p, mk in hits if mk in assays]
+        if len({mk for _, mk in hits}) < 2: return [(None, sentence)]
+        out = []
+        for k, (p, mk) in enumerate(hits):
+            end = hits[k + 1][0] if k + 1 < len(hits) else len(sentence)
+            if out and out[-1][0] == mk: out[-1] = (mk, out[-1][1] + sentence[p:end])
+            else: out.append((mk, sentence[p:end]))
+        if hits[0][0] > 0: out[0] = (out[0][0], sentence[:hits[0][0]] + out[0][1])
+        return out
+
+    def nearest_marker(src, pos):
+        found = [canon_marker(m.group(0)) for m in re.finditer(r'(?<![A-Za-z0-9])' + MARKER_RE + r'(?![A-Za-z0-9])', src[max(0, pos - 250):pos])]
+        found = [mk for mk in found if mk in assays]
+        return found[-1] if found else one_assay
+
+    def targets(sentence, carry):
+        """Assays a methods sentence is about: markers it names, else the carried scope, else all assays."""
+        mks = [m for m in markers_in(sentence) if m in assays]
+        return mks or carry or list(assays)
+
+    # PCR, per assay
+    MM = (r'((?:Q5|Phusion|Platinum|KAPA|AmpliTaq|GoTaq|MyTaq|HotStar|Phire|TaqMan|Qiagen Multiplex|QIAGEN Multiplex|Multiplex PCR'
+          r'|Environmental Master|Invitrogen|Takara|Accuprime|AccuPrime|Bioline|NEBNext|OneTaq|DreamTaq|Maxima|PrimeSTAR|Ex Taq)'
+          r'[\w®™\-.,/ ]{0,45}?(?:Master ?[Mm]ix|ReadyMix|Mastermix|[Mm]ix|PCR Kit|Kit|[Pp]olymerase|Gold|Taq)(?:\s*\d\.\d)?)')
+    carry = None
+    pcr_segments = []
+    for sent in fsents:
+        if not re.search(r'µ[lL]|cycles?|°\s*C|[Mm]aster ?[Mm]ix|[Pp]olymerase|PCR', sent): carry = None; continue
+        for seg_mk, seg in segments(sent):
+            pcr_segments.append((seg_mk, seg, sent))
+    for seg_mk, s, sent in pcr_segments:
+        named = [seg_mk] if seg_mk else [m for m in markers_in(s) if m in assays]
+        if re.search(r'\bqPCR\b|real[- ]time|\bprobe\b|\bC[tq]\b|ddPCR|\bdPCR\b|single[- ]species|TaqMan', s) and not named: carry = None; continue
+        mks = named or carry or list(assays)
+        carry = named or carry
+        cyc = re.search(r'(\d{2})\s*cycles?\s*(?:of|consisting of|comprising|each of|:)?\s*[^.;]{0,30}?(\d{2,3}(?:\.\d)?)\s*°\s*C[^,;]{0,30}[,;]\s*(?:followed by\s*)?(?:and\s*)?(\d{2}(?:\.\d)?)\s*°\s*C', s)
+        ann = re.search(r'anneal\w*[^.;]{0,40}?(\d{2}(?:\.\d)?)\s*°\s*C|(\d{2}(?:\.\d)?)\s*°\s*C[^.;]{0,25}anneal', s, re.I)
+        cyc_only = re.search(r'(\d{2})\s*(?:PCR\s*)?cycles\b', s)
+        pcr_ctx = re.search(r'PCR|reaction|amplif|[Mm]aster ?[Mm]ix|polymerase|primer', s)
+        vol = pcr_ctx and (re.search(r'(?:total|final|reaction)\s+volumes?\s+(?:of\s+)?(\d+(?:\.\d+)?)\s*µ[lL]', s, re.I)
+               or re.search(r'(\d+(?:\.\d+)?)[ -]?µ[lL]\s+(?:PCR\s+)?reactions?', s, re.I)
+               or re.search(r'\((\d+(?:\.\d+)?)\s*µ[lL]\s*(?:per|/)\s*(?:sample|reaction)\)', s, re.I)
+               or re.search(r'reactions?\s+(?:of|with a volume of)\s+(\d+(?:\.\d+)?)\s*µ[lL]', s, re.I))
+        dna = re.search(r'(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:of\s+)?(?:the\s+)?(?:\w+\s+)?(?:template|DNA|eDNA|extract)\b', s, re.I)
+        mm = re.search(MM, s)
+        rep = re.search(r'\b(?:in|run in|performed in|carried out in)\s+(duplicate|triplicate|quadruplicate)', s, re.I) or \
+              re.search(r'\b(two|three|four|five|six|eight|ten|twelve|\d+)\s+(?:independent\s+|technical\s+|replicate\s+)*(?:PCR\s+)?replicates?\b', s, re.I)
+        for mk in mks:
+            specific = bool(named)
+            if cyc:
+                put_a(mk, 'pcr_cycles', cyc.group(1), s, override=specific); put_a(mk, 'annealingTemp', cyc.group(3), s, override=specific)
+            elif cyc_only: put_a(mk, 'pcr_cycles', cyc_only.group(1), s, override=specific)
+            if ann: put_a(mk, 'annealingTemp', ann.group(1) or ann.group(2), s, override=specific)
+            if vol and float(vol.group(1)) <= 200: put_a(mk, 'amplificationReactionVolume', vol.group(1), s)
+            if dna and pcr_ctx and 'elut' not in s.lower() and float(dna.group(1)) <= 20: put_a(mk, 'pcr_dna_vol', dna.group(1), s)
+            if mm: put_a(mk, 'commercial_mm', norm(mm.group(1)), s)
+            if rep:
+                r = rep.group(1).lower()
+                n = {'duplicate': 2, 'triplicate': 3, 'quadruplicate': 4}.get(r) or num_word(r)
+                if n and n < 20: put_a(mk, 'pcr_rep', str(n), s)
+
+    # primers: DNA sequences in the text (tables included), adapters/probes removed
+    NEXTERA_F, NEXTERA_R = 'TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG', 'GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG'
+    IUPAC = 'ACGTRYKMSWBDHVNI'
+    wrapped = text.replace('\u2212', '-')
+    for _ in range(4):   # only sequences wrapped over a line break: "…AGACAGTA\nGAACAGGC…"
+        wrapped = re.sub(r'\b([' + IUPAC + r']{8,})[ \t]*\n[ \t]*([' + IUPAC + r']{2,})\b(?![ \t]+[' + IUPAC + r']{12,})(?![.\-]?[a-z])', r'\1\2', wrapped)
+    joined = norm(wrapped).replace('μ', 'µ')
+    seen_seq, order = set(), {}
+    for m in re.finditer(r'(?<![A-Za-z])([' + IUPAC + r']{15,})(?![A-Za-z])', joined):
+        seq = m.group(1)
+        if sum(c in 'ACGT' for c in seq) < 0.6 * len(seq) or seq in seen_seq: continue
+        seen_seq.add(seq)
+        before = joined[max(0, m.start() - 120): m.start()]
+        ctx = list(re.finditer(r'(probe|\bFAM\b|BHQ|\bMGB\b|quencher|TaqMan|qPCR|ddPCR|single[- ]species)|(metabarcod|amplicon sequencing|Illumina|first[- ]round PCR|librar)',
+                               joined[max(0, m.start() - 400): m.start()], re.I))
+        if ctx and ctx[-1].group(1): continue
+        if re.search(r'\bFAM\b|BHQ|\bMGB\b|quencher', joined[m.end(): m.end() + 30]): continue
+        if 'AATGATACGGCGACCACC' in seq or 'CAAGCAGAAGACGGCATACGA' in seq: continue          # index adapters
+        direction = None
+        for ov, d in ((NEXTERA_F, 'fwd'), (NEXTERA_R, 'rev')):
+            if seq.startswith(ov): seq, direction = seq[len(ov):], d
+        if len(seq) < 14 or seq in (NEXTERA_F, NEXTERA_R): continue
+        near = before[-70:]
+        if direction is None:
+            dw = list(re.finditer(r'(forward|fwd|\b[\w\-]*\d[\w\-]*F\b|\bF\s*[:(])|(reverse|\brev\b|\b[\w\-]*\d[\w\-]*R\b|\bR\s*[:(])', near, re.I))
+            if dw: direction = 'fwd' if dw[-1].group(1) else 'rev'
+        nm = re.findall(r'\b([A-Za-z0-9][\w\-]*?\d[\w\-]*[FRfr](?:wd|ev)?)\b', near)
+        lab = re.search(r'\(\s*([A-Za-z][\w.\-]{1,20})\s*[;:,]\s*5\W{0,3}-?\s*$', near)
+        if lab: nm = [lab.group(1)]
+        mk = nearest_marker(joined, m.start())
+        if not mk: continue
+        k = order.setdefault(mk, 0)
+        if direction is None: direction = 'fwd' if k % 2 == 0 else 'rev'
+        order[mk] = k + 1
+        src = (before[-150:] + seq)[-300:]
+        put_a(mk, 'primer_fwd' if direction == 'fwd' else 'primer_rev', seq, src)
+        if nm: put_a(mk, 'primer_name_fwd' if direction == 'fwd' else 'primer_name_rev', nm[-1], src)
+
+    # sequencing kit / instrument / indexing approach
+    kit = re.search(r'((?:MiSeq|NextSeq|NovaSeq|HiSeq|iSeq) (?:Reagent|Nano|Micro|High Output|Mid Output|SBS)[^.;)]{0,40}?v\d(?:\.\d)?[^.;)]{0,25}?\d{3}[ -]?cycles?)', fl, re.I) or \
+          re.search(r'((?:MiSeq|NextSeq|NovaSeq|HiSeq|iSeq)[\w ]{0,15}?(?:Reagent\s+(?:Kit\s+)?|Nano\s+)?v\d(?:\.\d)?[^.;)]{0,25}?\d{3}[ -]?cycles?)', fl, re.I) or \
+          re.search(r'((?:MiSeq|NextSeq|NovaSeq|HiSeq|iSeq)[\w ]{0,20}?(?:Reagent Kit|Nano Kit|Micro Kit|flow ?cell)[^.;)]{0,20})', fl, re.I)
+    if kit:
+        for mk in assays: put_a(mk, 'seq_kit', norm(kit.group(1)), kit)
+    if not meta.get('instrument'):
+        im = re.search(r'\b(MiSeq|iSeq 100|NextSeq (?:500|550|1000|2000|1000/2000)|NovaSeq (?:6000|X(?: Plus)?)|HiSeq (?:2000|2500|4000|X)|MinION|GridION|PromethION|Ion Torrent PGM|Ion S5)\b', fl)
+        if im: put('instrument', ('Illumina ' if re.match(r'MiSeq|iSeq|NextSeq|NovaSeq|HiSeq', im.group(1)) else '') + im.group(1), im)
+    if not meta.get('platform'):
+        if re.search(r'\bIllumina\b|MiSeq|NovaSeq|NextSeq|HiSeq', fl): put('platform', 'ILLUMINA', re.search(r'\bIllumina\b|MiSeq|NovaSeq|NextSeq|HiSeq', fl))
+        elif re.search(r'Nanopore|MinION|GridION', fl): put('platform', 'OXFORD_NANOPORE', re.search(r'Nanopore|MinION|GridION', fl))
+        elif re.search(r'Ion Torrent|Ion S5|PGM', fl): put('platform', 'ION_TORRENT', re.search(r'Ion Torrent|Ion S5|PGM', fl))
+    two = re.search(r'second(?: round of| round| step)? PCR|indexing PCR|index PCR|two rounds of PCR|PCR2\b|second-step PCR|two-step|Fluidigm|Nextera XT|overhang adapter', fl, re.I)
+    if two: put('barcoding_pcr_appr', 'two-step PCR', two)
+    elif re.search(r'fusion primers|one-step|single-step|tagged primers', fl, re.I):
+        put('barcoding_pcr_appr', 'one-step PCR', re.search(r'fusion primers|one-step|single-step|tagged primers', fl, re.I))
+    if re.search(r'paired[- ]end|\d\s*[x×]\s*\d{2,3}\s*bp|forward and reverse reads|R1 and R2', fl, re.I):
+        put('lib_layout', 'paired end', re.search(r'paired[- ]end|\d\s*[x×]\s*\d{2,3}\s*bp|forward and reverse reads|R1 and R2', fl, re.I))
+    phx = re.search(r'(\d+(?:\.\d+)?)\s*%\s*(?:of\s+)?PhiX|PhiX[^.;]{0,30}?(\d+(?:\.\d+)?)\s*%', fl, re.I)
+    if phx: put('phix_perc', phx.group(1) or phx.group(2), phx)
+
+    # bioinformatics tools (with versions where given)
+    def tools(names, context):
+        found = []
+        for s in fsents:
+            if not re.search(context, s, re.I): continue
+            for t in names:
+                for m in re.finditer(r'\b(' + t + r')\b\s*(?:\(\s*)?(?:v(?:ersion)?\.?\s*)?(\d+(?:\.\d+)+)?', s, re.I):
+                    label = m.group(1) + (f' {m.group(2)}' if m.group(2) else '')
+                    if not any(label.split()[0].lower() == f.split()[0].lower() for f, _ in found): found.append((label, s))
+        return found
+    tr = tools(['cutadapt', 'Trimmomatic', 'fastp', 'Trim Galore', 'AdapterRemoval', 'BBDuk', 'Sickle', 'PRINSEQ', 'ngsfilter', 'Skewer'],
+               r'trim|primer|adapter|quality|clip|remov')
+    if len(tr) > 1: meta['trim_method'] = '; '.join(t for t, _ in tr); cite('trim_method', tr[0][1])
+    elif tr: put('trim_method', tr[0][0], tr[0][1])
+    mg = tools(['FLASH2?', 'PEAR', 'VSEARCH', 'USEARCH', 'PANDAseq', 'fastp', 'BBMerge', 'illuminapairedend', 'DADA2'],
+               r'merg|join|pair|overlap|assembl')
+    if mg: put('merge_tool', mg[0][0] + (' mergePairs' if mg[0][0].upper().startswith('DADA2') else ''), mg[0][1])
+    cl = tools(['VSEARCH', 'USEARCH', 'UPARSE', 'UNOISE3?', 'SWARM', 'CD-HIT', 'Deblur', 'DADA2', 'QIIME ?2?', 'OBITools'],
+               r'cluster|OTU|ASV|denois|zOTU|amplicon sequence variant')
+    if cl: put('otu_clust_tool', cl[0][0], cl[0][1])
+    cc = re.search(r'(\d{2,3}(?:\.\d+)?)\s*%\s*(?:sequence\s*)?(?:similarity|identity)[^.;]{0,40}(?:OTU|cluster)|(?:OTU|cluster)[^.;]{0,60}?(\d{2,3}(?:\.\d+)?)\s*%', fl, re.I)
+    if cc and not meta.get('otu_clust_cutoff'): put('otu_clust_cutoff', cc.group(1) or cc.group(2), cc)
+    tax = None
+    for pat, cat in ((r'\bBLAST\w*\b|blastn|megablast|usearch_global|global alignment', 'sequence similarity'),
+                     (r'na[iï]ve Bayes|RDP classifier|feature-classifier|IDTAXA|assignTaxonomy|SINTAX|k-mer', 'sequence composition'),
+                     (r'phylogenetic placement|\bEPA\b|pplacer|SEPP', 'phylogeny')):
+        m = re.search(pat, fl, re.I)
+        if m:
+            tax = (cat, m); break
+    idc = re.search(r'(\d{2,3}(?:\.\d+)?)\s*%\s*(?:sequence\s*|query\s*)?(?:identity|similarity|match)', fl, re.I)
+    qcv = re.search(r'(\d{2,3})\s*%\s*(?:query\s*)?coverage', fl, re.I)
+    mrd = re.search(r'(?:fewer|less) than (\d+) (?:reads|copies|sequences)[^.]{0,80}?(?:removed|excluded|discarded)|(?:removed|excluded|discarded)[^.]{0,60}?(?:fewer|less) than (\d+) (?:reads|copies|sequences)', fl, re.I)
+    if mrd: put('min_reads_cutoff', mrd.group(1) or mrd.group(2), mrd); put('min_reads_cutoff_unit', 'reads', mrd)
+    if idc: put('tax_class_id_cutoff', idc.group(1), idc)
+    if qcv: put('tax_class_query_cutoff', qcv.group(1), qcv)
+    DB = (r'(SILVA|Silva|PR2|MIDORI2?|Midori2?|UNITE|Greengenes2?|RDP|BOLD|GenBank|NCBI(?: nt| nr| GenBank)?|MitoFish|diat\.barcode|CRABS|EMBL)'
+          r'(?:[^.;,()]{0,25}?\(?\s*(?:v|version|release|r)\.?\s*(\d+(?:\.\d+)*))?')
+    last_named, since = [], 99
+    for s in sorted(fsents, key=lambda x: 'respectively' not in x):
+        named = [mm for mm in markers_in(s) if mm in assays]
+        if named: last_named, since = named, 0
+        else: since += 1
+        if not re.search(r'taxonom|classif|BLAST|reference database|database|assign', s, re.I): continue
+        dbs = [(m.group(1) + (f' v{m.group(2)}' if m.group(2) else '')) for m in re.finditer(DB, s)]
+        dbs = list(dict.fromkeys(dbs))
+        if not dbs: continue
+        if 'respectively' in s and len(named) == len(dbs):
+            for mk, d in zip(named, dbs): put_a(mk, 'otu_db', d, s)
+            continue
+        scope = named or (last_named if since <= 4 else []) or ([one_assay] if one_assay else [])
+        for mk in scope: put_a(mk, 'otu_db', ' | '.join(dbs), s)
+    for mk in assays:
+        if tax: put_a(mk, 'tax_assign_cat', tax[0], tax[1]); put_a(mk, 'otu_seq_comp_appr', norm(tax[1].group(0)), tax[1])
+
+    # sampling, filtration, storage, extraction
+    fsz = (re.search(r'(\d+(?:\.\d+)?)\s*[-‐]?\s*µm(?:\s*pore(?:\s*size)?)?[^.;]{0,50}?(?:filter|Sterivex|membrane|capsule)', fl, re.I)
+           or re.search(r'(?:filter|Sterivex|membrane|capsule)[^.;]{0,50}?(\d+(?:\.\d+)?)\s*µm', fl, re.I)
+           or re.search(r'pore size of (\d+(?:\.\d+)?)\s*µm', fl, re.I))
+    if fsz: put('size_frac', fsz.group(1), fsz)
+    fdm = re.search(r'(\d{2,3})\s*[-‐]?\s*mm(?:\s*diameter)?[^.;]{0,40}?(?:filter|membrane)|(?:filter|membrane)[^.;]{0,30}?(\d{2,3})\s*mm', fl, re.I)
+    if fdm: put('filter_diameter', fdm.group(1) or fdm.group(2), fdm)
+    for pat, mat in ((r'Sterivex[- ]?GP|polyethersulfone|\bPES\b', 'polyethersulfone'), (r'Sterivex[- ]?HV|PVDF|Durapore', 'other: PVDF'),
+                     (r'cellulose nitrate|nitrocellulose', 'other: cellulose nitrate'), (r'mixed cellulose ester|\bMCE\b', 'cellulose ester'),
+                     (r'glass[- ]fib(?:re|er)|GF/F|GF/C', 'glass fiber'), (r'polycarbonate', 'track etched polycarbonate'), (r'\bnylon\b', 'nylon'),
+                     (r'Sterivex', 'polyethersulfone')):
+        m = re.search(pat, fl, re.I)
+        if m and re.search(r'filter|Sterivex|membrane', at(m.start()), re.I):
+            put('filter_material', mat, m); break
+    fnm = re.search(r'\b(Sterivex[\w\-]*(?: [\w\-]+ Filter Unit)?|Whatman[^.,;()]{0,25}|Millipore[^.,;()]{0,25}filter|NatureMetrics[^.,;()]{0,20}|Smith-Root[^.,;()]{0,20})', fl)
+    if fnm: put('filter_name', norm(fnm.group(1)), fnm)
+    act = re.search(r'peristaltic|vacuum|pump|syringe', fl, re.I)
+    if act and 'filter_active' not in evidence: meta['filter_active'] = True; cite('filter_active', act)
+    ssz = (re.search(r'(?:filter(?:ed|ing)|collected|sampled|took|taken)\s+(?:~|approximately\s+|up to\s+|a total of\s+)?(\d+(?:\.\d+)?)\s*(L|l|litres?|liters?|mL|ml)\b', fl)
+           or re.search(r'(\d+(?:\.\d+)?)\s*(L|l|litres?|liters?|mL|ml)\s+(?:of\s+)?(?:\w+\s+){0,2}(?:water|seawater|sample)s?\b', fl))
+    if ssz and not meta.get('samp_size'):
+        unit = 'mL' if ssz.group(2).lower() in ('ml',) else 'L'
+        put('samp_size', ssz.group(1), ssz); put('samp_size_unit', unit, ssz)
+    for s in fsents:
+        st = re.search(r'(?:stored|kept|frozen|preserved|transported)\s+(?:at|in)\s+(-?\d+)\s*°\s*C', s, re.I)
+        if st:
+            put('prepped_samp_store_temp' if re.search(r'filter|extract|tube|cartridge', s, re.I) else 'samp_store_temp', st.group(1), s); break
+    sol = re.search(r"(?:in|with|containing|added)\s+(?:\d+\s*m[lL]\s+(?:of\s+)?)?(?:\d+\s*%\s*)?(ethanol|Longmire'?s?(?: (?:buffer|solution))?|ATL buffer|RNAlater|DNA/RNA Shield|lysis buffer|CTAB)", fl, re.I)
+    if sol: put('prepped_samp_store_sol', sol.group(1), sol)
+    for s in fsents:
+        if not re.search(r'extract', s, re.I): continue
+        km = re.search(r"((?:[A-Z][\w®™'\-/&.]*\s){0,6}?(?:[Bb]lood (?:and|&) [Tt]issue |PowerSoil |PowerWater |Soil |Plant )?(?:Mini |Maxi |Pro |Plus )?[Kk]it)(\s*\([^)]{2,60}\))?", s)
+        if km and len(km.group(1)) > 8:
+            put('ext_kit', norm(km.group(1) + (km.group(2) or '')), s); break
+    if not meta.get('ext_sep'):
+        kitname = meta.get('ext_kit') or ''
+        if re.search(r'DNeasy|Power(?:Water|Soil|Max)|Quick-DNA|NucleoSpin|QIAamp|Blood (?:and|&) Tissue|Monarch|spin column', kitname + ' ' + fl, re.I):
+            meta['ext_sep'] = 'column-based'; cite('ext_sep', meta.get('ext_kit') or re.search(r'spin column|DNeasy|NucleoSpin', fl, re.I))
+        elif re.search(r'MagBead|MagMAX|KingFisher|MagAttract|magnetic bead', kitname + ' ' + fl, re.I):
+            meta['ext_sep'] = 'magnetic beads'; cite('ext_sep', re.search(r'MagBead|MagMAX|KingFisher|MagAttract|magnetic bead', fl, re.I))
+        elif re.search(r'phenol[- ]chloroform', fl, re.I):
+            meta['ext_sep'] = 'phenol chloroform'; cite('ext_sep', re.search(r'phenol[- ]chloroform', fl, re.I))
+
+    # controls
+    nc = re.search(r'\bblanks?\b|negative controls?|no[- ]template controls?|\bNTCs?\b', fl, re.I)
+    if nc and not meta.get('neg_controls'): meta['neg_controls'] = True; cite('neg_controls', nc)
+    pc = re.search(r'positive controls?|mock communit|Microbial Community Standard', fl, re.I)
+    if pc and not meta.get('pos_controls'): meta['pos_controls'] = True; cite('pos_controls', pc)
+
+    seq_words = re.search(r'\bIllumina\b|MiSeq|NovaSeq|NextSeq|HiSeq|Nanopore|MinION|Ion Torrent|metabarcod|high[- ]throughput sequencing|amplicon sequencing', fl, re.I)
+    q = re.search(r'\bqPCR\b|ddPCR|droplet digital|TaqMan|real[- ]time PCR|quantitative PCR', fl, re.I)
+    if q and not seq_words:
+        meta['assay_type'] = 'targeted'; cite('assay_type', q)
+        meta['notes'].append('This looks like a targeted (qPCR/ddPCR) study. The tool is built for metabarcoding; '
+                             'targeted-assay fields (probe, standard curve, LOD/LOQ) need to be filled by hand.')
     meta['assays'] = list(assays.values())
     # biological replicates
     if meta.get('samples_per_site_round'): meta['biological_rep'] = str(meta['samples_per_site_round'])
+    cite('biological_rep', evidence.get('samples_per_site_round'))
     # bibliographic citation for an unpublished report
     if re.search(r'Final Report', flat, re.I) and meta.get('project_title'):
         yr = (meta.get('end_date') or '')[:4]
@@ -1141,9 +1598,9 @@ def cell_text(cell_xml_str: str, ss: list[str]) -> str:
         v = re.search(r'<v>(\d+)</v>', cell_xml_str)
         return ss[int(v.group(1))] if v else ''
     if 't="inlineStr"' in cell_xml_str:
-        return ''.join(re.findall(r'<t[^>]*>([^<]*)</t>', cell_xml_str))
+        return html.unescape(''.join(re.findall(r'<t[^>]*>([^<]*)</t>', cell_xml_str)))
     v = re.search(r'<v>([^<]*)</v>', cell_xml_str)
-    return v.group(1) if v else ''
+    return html.unescape(v.group(1)) if v else ''
 
 
 def sheet_paths(pkg) -> dict:
@@ -1229,7 +1686,7 @@ def project_values(meta: dict, version: str) -> dict:
         'recordedBy': meta.get('recorded_by'), 'recordedByID': meta.get('recorded_by_id'),
         'project_contact': meta.get('project_contact'), 'institution': meta.get('institution'),
         'institutionID': meta.get('institution_ror'), 'project_name': title or None, 'project_id': pid or None,
-        'study_factor': meta.get('study_factor'), 'assay_type': 'metabarcoding',
+        'study_factor': meta.get('study_factor'), 'assay_type': meta.get('assay_type') or 'metabarcoding',
         'sterilise_method': meta.get('sterilise_method'),
         'neg_cont_0_1': '1' if meta.get('neg_controls') else '0', 'pos_cont_0_1': '1' if meta.get('pos_controls') else '0',
         'checkls_ver': version, 'mod_date': time.strftime('%Y-%m-%d'),
@@ -1252,6 +1709,8 @@ def project_values(meta: dict, version: str) -> dict:
         'error_rate_tool': meta.get('error_rate_tool'), 'error_rate_type': meta.get('error_rate_type'),
         'error_rate_cutoff': meta.get('error_rate_cutoff'), 'chimera_check_method': meta.get('chimera_check_method'),
         'chimera_check_param': meta.get('chimera_check_param'), 'otu_clust_tool': meta.get('otu_clust_tool'),
+        'tax_class_id_cutoff': meta.get('tax_class_id_cutoff'), 'tax_class_query_cutoff': meta.get('tax_class_query_cutoff'),
+        'min_reads_cutoff': meta.get('min_reads_cutoff'), 'min_reads_cutoff_unit': meta.get('min_reads_cutoff_unit'),
         'otu_clust_cutoff': meta.get('otu_clust_cutoff'), 'screen_contam_method': meta.get('screen_contam_method'),
         'otu_raw_description': meta.get('otu_raw_description'),
         'bioinfo_method_additional': meta.get('bioinfo_method_additional'),
@@ -1282,7 +1741,8 @@ def fill_project(rows, ss, meta, version):
         if section == 'Targeted assay detection':
             set_cell(rows, rn, 'D', NA); continue
         if term in ASSAY_TERMS or term.startswith('probe'):
-            vals = [assay_value(a, term, meta) for a in assays]
+            aov = (meta.get('_overrides') or {}).get('assay', {})
+            vals = [aov.get(str(i), {}).get(term, assay_value(a, term, meta)) for i, a in enumerate(assays)]
             if term == 'assay_name':
                 set_cell(rows, rn, 'D', ' | '.join(str(v) for v in vals) or MISS)
                 if len(assays) > 1:
@@ -1301,6 +1761,8 @@ def fill_project(rows, ss, meta, version):
             filled += 1
             continue
         v = pv.get(term)
+        if term in (meta.get('_overrides') or {}).get('project', {}):
+            v = meta['_overrides']['project'][term]
         if present(v):
             set_cell(rows, rn, 'D', v, term=term); filled += 1
         else:
@@ -1344,7 +1806,8 @@ def build_samples(meta):
         'samp_mat_process': meta.get('samp_mat_process'),
         'filter_passive_active_0_1': '1' if meta.get('filter_active') else None,
         'size_frac': meta.get('size_frac'), 'filter_diameter': meta.get('filter_diameter'),
-        'filter_material': meta.get('filter_material'),
+        'filter_material': meta.get('filter_material'), 'filter_name': meta.get('filter_name'),
+        'samp_store_temp': meta.get('samp_store_temp'), 'samp_store_sol': meta.get('samp_store_sol'),
         'prepped_samp_store_temp': meta.get('prepped_samp_store_temp'),
         'prepped_samp_store_sol': meta.get('prepped_samp_store_sol'),
         'samp_vol_we_dna_ext_unit': 'mL',
@@ -1398,6 +1861,12 @@ def build_samples(meta):
                        nucl_acid_ext=NA_C, nucl_acid_ext_kit=NA_C, nucl_acid_ext_lysis=NA_C, nucl_acid_ext_sep=NA_C,
                        nucl_acid_ext_modify=NA_C, concentration=NA_C, concentration_unit=NA_C, concentration_method=NA_C)
             out.append((rec, [a['assay_name']], 'lab'))
+    sov = (meta.get('_overrides') or {}).get('sample', {})
+    if sov:
+        for rec, _, control in out:
+            for term, v in sov.items():
+                if not control or (rec.get(term) not in (None, NA_C, NA_S) and present(rec.get(term))):
+                    rec[term] = v
     return out
 
 
@@ -1509,6 +1978,136 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     }
 
 
+# ── review step: values + source sentences, user edits as overrides ──────────
+
+SECTIONS = [
+    ('Project', ['recordedBy', 'recordedByID', 'project_contact', 'institution', 'institutionID', 'project_name', 'project_id',
+                 'study_factor', 'assay_type', 'license', 'rightsHolder', 'accessRights', 'bibliographicCitation', 'code_repo']),
+    ('Controls & contamination', ['sterilise_method', 'neg_cont_0_1', 'pos_cont_0_1', 'screen_contam_method']),
+    ('Sampling', ['biological_rep', 'samp_collect_method', 'samp_size', 'samp_size_unit', 'env_broad_scale', 'env_local_scale',
+                  'env_medium', 'habitat_natural_artificial_0_1']),
+    ('Filtration & storage', ['samp_mat_process', 'filter_passive_active_0_1', 'size_frac', 'filter_diameter', 'filter_material',
+                              'filter_name', 'samp_store_temp', 'samp_store_sol',
+                              'samp_store_dur', 'samp_store_loc', 'samp_store_method_additional', 'prepped_samp_store_temp',
+                              'prepped_samp_store_sol']),
+    ('DNA extraction', ['nucl_acid_ext', 'nucl_acid_ext_kit', 'nucl_acid_ext_lysis', 'nucl_acid_ext_sep', 'nucl_acid_ext_modify',
+                        'concentration_method']),
+    ('PCR', ['pcr_0_1', 'assay_name', 'target_gene', 'targetTaxonomicAssay', 'targetTaxonomicScope', 'pcr_primer_name_forward',
+             'pcr_primer_name_reverse', 'pcr_primer_forward', 'pcr_primer_reverse', 'pcr_primer_reference_forward',
+             'pcr_primer_reference_reverse', 'pcr_primer_vol_forward', 'pcr_primer_vol_reverse', 'pcr_primer_conc_forward',
+             'pcr_primer_conc_reverse', 'ampliconSize', 'commercial_mm', 'custom_mm', 'amplificationReactionVolume', 'pcr_dna_vol',
+             'pcr_rep', 'nucl_acid_amp', 'pcr_cond', 'annealingTemp', 'pcr_cycles', 'pcr_method_additional']),
+    ('Library preparation & sequencing', ['barcoding_pcr_appr', 'pcr2_commercial_mm', 'pcr2_custom_mm', 'pcr2_amplificationReactionVolume',
+                                          'pcr2_dna_vol', 'pcr2_cond', 'platform', 'instrument', 'seq_kit', 'lib_layout',
+                                          'adapter_forward', 'adapter_reverse', 'lib_screen', 'sequencing_location',
+                                          'seq_method_additional']),
+    ('Bioinformatics', ['sop_bioinformatics', 'trim_method', 'trim_param', 'demux_tool', 'merge_tool', 'min_len_cutoff',
+                        'error_rate_tool', 'error_rate_type', 'error_rate_cutoff', 'chimera_check_method', 'chimera_check_param',
+                        'otu_clust_tool', 'otu_clust_cutoff', 'min_reads_cutoff', 'min_reads_cutoff_unit', 'otu_db', 'tax_assign_cat',
+                        'otu_seq_comp_appr', 'tax_class_id_cutoff', 'tax_class_query_cutoff',
+                        'otu_raw_description', 'otu_final_description', 'bioinfo_method_additional']),
+]
+SAMPLE_TERMS = ['samp_collect_method', 'samp_size', 'samp_size_unit', 'env_broad_scale', 'env_local_scale', 'env_medium',
+                'habitat_natural_artificial_0_1', 'samp_mat_process', 'filter_passive_active_0_1', 'size_frac', 'filter_diameter',
+                'filter_material', 'filter_name', 'samp_store_temp', 'samp_store_sol',
+                'samp_store_dur', 'samp_store_loc', 'samp_store_method_additional', 'prepped_samp_store_temp',
+                'prepped_samp_store_sol', 'nucl_acid_ext', 'nucl_acid_ext_kit', 'nucl_acid_ext_lysis', 'nucl_acid_ext_sep',
+                'nucl_acid_ext_modify', 'concentration_method']
+GENERATED = {'project_id', 'assay_type', 'pcr_0_1', 'neg_cont_0_1', 'pos_cont_0_1', 'checkls_ver', 'mod_date', 'rightsHolder',
+             'recordedBy', 'assay_name', 'target_gene', 'habitat_natural_artificial_0_1', 'filter_passive_active_0_1',
+             'otu_raw_description', 'tax_assign_cat'}
+# FAIRe term -> key under which the extractor recorded its source sentence
+EVIDENCE_KEY = {
+    'institution': 'institution', 'institutionID': 'institution', 'project_name': 'project_title',
+    'bibliographicCitation': 'project_title', 'rightsHolder': 'institution',
+    'sterilise_method': 'sterilise_method', 'neg_cont_0_1': 'neg_controls', 'pos_cont_0_1': 'pos_controls',
+    'screen_contam_method': 'screen_contam_method', 'biological_rep': 'biological_rep',
+    'samp_collect_method': 'samp_collect_method', 'samp_size': 'samp_size', 'samp_size_unit': 'samp_size_unit',
+    'env_broad_scale': 'env_broad_scale', 'env_local_scale': 'env_local_scale', 'env_medium': 'env_medium',
+    'samp_mat_process': 'samp_mat_process', 'filter_passive_active_0_1': 'filter_active', 'size_frac': 'size_frac',
+    'filter_diameter': 'filter_diameter', 'filter_material': 'filter_material', 'samp_store_dur': 'samp_store_dur',
+    'samp_store_loc': 'samp_store_loc', 'samp_store_method_additional': 'samp_store_method_additional',
+    'prepped_samp_store_temp': 'prepped_samp_store_temp', 'prepped_samp_store_sol': 'prepped_samp_store_sol',
+    'nucl_acid_ext': 'nucl_acid_ext', 'nucl_acid_ext_kit': 'ext_kit', 'nucl_acid_ext_lysis': 'ext_lysis',
+    'nucl_acid_ext_sep': 'ext_sep', 'nucl_acid_ext_modify': 'ext_modifications', 'concentration_method': 'conc_method',
+    'barcoding_pcr_appr': 'barcoding_pcr_appr', 'pcr2_commercial_mm': 'pcr2_commercial_mm', 'pcr2_custom_mm': 'pcr2_custom_mm',
+    'pcr2_amplificationReactionVolume': 'pcr2_amplificationReactionVolume', 'pcr2_dna_vol': 'pcr2_dna_vol',
+    'platform': 'platform', 'instrument': 'instrument', 'lib_layout': 'lib_layout', 'adapter_forward': 'adapter_forward',
+    'adapter_reverse': 'adapter_reverse', 'lib_screen': 'lib_screen', 'sequencing_location': 'sequencing_location',
+    'sop_bioinformatics': 'sop_bioinformatics', 'trim_method': 'trim_method', 'merge_tool': 'merge_tool',
+    'error_rate_tool': 'error_rate_tool', 'error_rate_type': 'error_rate_type', 'error_rate_cutoff': 'error_rate_cutoff',
+    'chimera_check_method': 'chimera_check_method', 'chimera_check_param': 'chimera_check_param',
+    'otu_clust_tool': 'otu_clust_tool', 'otu_clust_cutoff': 'otu_clust_cutoff', 'otu_raw_description': 'otu_raw_description',
+    'bioinfo_method_additional': 'bioinfo_method_additional', 'nucl_acid_amp': 'nucl_acid_amp',
+    'seq_method_additional': 'seq_method_additional', 'filter_name': 'filter_name', 'samp_store_temp': 'samp_store_temp',
+    'samp_store_sol': 'samp_store_sol', 'tax_class_id_cutoff': 'tax_class_id_cutoff', 'tax_class_query_cutoff': 'tax_class_query_cutoff',
+    'min_reads_cutoff': 'min_reads_cutoff', 'min_reads_cutoff_unit': 'min_reads_cutoff_unit',
+}
+ASSAY_EVIDENCE_KEY = {'pcr_primer_name_forward': 'primer_name_fwd', 'pcr_primer_name_reverse': 'primer_name_rev',
+                      'pcr_primer_reference_forward': 'primer_ref_fwd', 'pcr_primer_reference_reverse': 'primer_ref_rev',
+                      'pcr_primer_vol_forward': 'pcr_primer_vol', 'pcr_primer_vol_reverse': 'pcr_primer_vol',
+                      'pcr_primer_conc_forward': 'pcr_primer_conc', 'pcr_primer_conc_reverse': 'pcr_primer_conc',
+                      'target_gene': 'primer_name_fwd', 'assay_name': 'assay_name'}
+
+
+def _evidence_for(meta, term, value, assay=None):
+    if value in (None, '') or str(value).startswith(('missing:', 'not applicable')): return None
+    ev = meta.get('_evidence') or {}
+    if assay is not None:
+        key = ASSAY_EVIDENCE_KEY.get(term, term)
+        return ev.get(f"{assay['marker']}.{key}") or (ev.get(EVIDENCE_KEY[term]) if term in EVIDENCE_KEY else None)
+    return ev.get(EVIDENCE_KEY.get(term, term))
+
+
+def _section_of(term):
+    for name, terms in SECTIONS:
+        if term in terms: return name
+    return 'Other'
+
+
+def review_items(meta: dict, text: str = '') -> list:
+    """Everything the tool would write, with the sentence each value came from, for the user to check."""
+    ov = meta.get('_overrides') or {}
+    items = []
+    pv = project_values(meta, '1')
+    for term, value in pv.items():
+        if term in ('checkls_ver', 'mod_date'): continue
+        if term in ov.get('project', {}): value = ov['project'][term]
+        if term == 'pcr_method_additional': continue
+        items.append({'id': f'project:{term}', 'section': _section_of(term), 'term': term, 'scope': 'project',
+                      'value': '' if value is None else str(value), 'generated': term in GENERATED,
+                      'evidence': _evidence_for(meta, term, value)})
+    for i, a in enumerate(meta.get('assays') or []):
+        for term in sorted(ASSAY_TERMS, key=lambda t: [x for _, ts in SECTIONS for x in ts].index(t) if any(t in ts for _, ts in SECTIONS) else 999):
+            value = ov.get('assay', {}).get(str(i), {}).get(term, assay_value(a, term, meta))
+            items.append({'id': f'assay:{i}:{term}', 'section': _section_of(term), 'term': term, 'scope': 'assay',
+                          'assay': a.get('assay_name'), 'value': '' if value is None else str(value),
+                          'generated': term in GENERATED,
+                          'evidence': _evidence_for(meta, term, value, a)})
+    samples = build_samples(meta)
+    first = next((rec for rec, _, c in samples if not c), {})
+    for term in SAMPLE_TERMS:
+        value = ov.get('sample', {}).get(term, first.get(term))
+        items.append({'id': f'sample:{term}', 'section': _section_of(term), 'term': term, 'scope': 'samples',
+                      'value': '' if value is None else str(value), 'generated': term in GENERATED,
+                      'evidence': _evidence_for(meta, term, value)})
+    order = [name for name, _ in SECTIONS] + ['Other']
+    items.sort(key=lambda x: order.index(x['section']))
+    return items
+
+
+def apply_review(meta: dict, edits: dict) -> dict:
+    """edits: {item id: new value}. An empty value means 'not stated' (written as missing wording)."""
+    ov = meta.setdefault('_overrides', {'project': {}, 'assay': {}, 'sample': {}})
+    for key, value in (edits or {}).items():
+        value = None if value is None or str(value).strip() == '' else str(value).strip()
+        parts = key.split(':')
+        if parts[0] == 'project': ov.setdefault('project', {})[parts[1]] = value
+        elif parts[0] == 'assay': ov.setdefault('assay', {}).setdefault(parts[1], {})[parts[2]] = value
+        elif parts[0] == 'sample': ov.setdefault('sample', {})[parts[1]] = value
+    return meta
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  4. Claude-assisted extraction (same schema as the rule-based extractor)
 # ════════════════════════════════════════════════════════════════════════════
@@ -1551,7 +2150,10 @@ assays: [{marker ("16S","18S","12S","COI","rbcL","ITS",...), assay_name (short i
           otu_final_description}],
 sites: [{name, code (short id, no spaces), latitude, longitude, attributes}],
 rounds: [{code ("R1","R2",...), iso_date (YYYY-MM-DD or YYYY-MM-DD/YYYY-MM-DD), verbatim, avg_vol_ml}],
-runs: [{seq_run_id, date, assays: [markers sequenced on this run]}]
+runs: [{seq_run_id, date, assays: [markers sequenced on this run]}],
+_evidence: {key: "exact quote from the report supporting that value"}  — one entry for EVERY top-level value you give,
+           copied word for word (max ~30 words); for assay fields use the key "<marker>.<field>", e.g. "COI.primer_name_fwd".
+Values without an exact supporting quote will be discarded.
 
 REPORT:
 """
@@ -1579,9 +2181,39 @@ def claude_prompt(text: str) -> str:
     return CLAUDE_PROMPT + text[:MAX_REPORT_CHARS]
 
 
-def facts_from_claude(data: dict) -> dict:
-    """Tidy Claude's JSON into the same shape the rule-based extractor returns."""
-    meta = {k: v for k, v in (data or {}).items() if v not in (None, '', [])}
+def _quote_found(quote: str, flat_text: str) -> bool:
+    q = re.sub(r'\s+', ' ', str(quote or '')).strip().lower()
+    if len(q) < 8: return False
+    if q in flat_text: return True
+    words = q.split()                                   # tolerate small differences (hyphenation, ellipses)
+    chunks = [' '.join(words[i:i + 6]) for i in range(0, max(1, len(words) - 5), 3)]
+    return sum(c in flat_text for c in chunks) >= max(1, len(chunks) // 2)
+
+
+GROUNDING_EXEMPT = {'notes', 'assays', 'sites', 'rounds', 'runs', '_evidence', 'language'}
+
+
+def facts_from_claude(data: dict, text: str = None) -> dict:
+    """Tidy Claude's JSON into the same shape the rule-based extractor returns.
+    If the report text is given, every value must be backed by a quote that really appears in it; others are dropped."""
+    data = dict(data or {})
+    evidence = {k: v for k, v in (data.pop('_evidence', None) or {}).items() if v}
+    dropped = []
+    if text is not None:
+        flat_text = re.sub(r'\s+', ' ', text).lower()
+        for k in list(data):
+            if k in GROUNDING_EXEMPT or data[k] in (None, '', []): continue
+            if not _quote_found(evidence.get(k), flat_text):
+                dropped.append(k); data.pop(k)
+        for a in data.get('assays') or []:
+            mk = canon_marker(str(a.get('marker') or a.get('assay_name') or ''))
+            for k in list(a):
+                if k in ('marker', 'assay_name') or a[k] in (None, ''): continue
+                if not _quote_found(evidence.get(f'{mk}.{k}'), flat_text):
+                    dropped.append(f'{mk}.{k}'); a.pop(k)
+        evidence = {k: v for k, v in evidence.items() if _quote_found(v, flat_text)}
+    meta = {k: v for k, v in data.items() if v not in (None, '', [])}
+    meta['_evidence'] = evidence
     for key in ('assays', 'sites', 'rounds', 'runs', 'notes'):
         meta[key] = [x for x in meta.get(key) or [] if x]
     for a in meta['assays']:
@@ -1601,6 +2233,9 @@ def facts_from_claude(data: dict) -> dict:
         except (TypeError, ValueError): meta[k] = 0
     if meta.get('samples_per_site_round') and not meta.get('biological_rep'):
         meta['biological_rep'] = str(meta['samples_per_site_round'])
+    if dropped:
+        meta['notes'].append(f'{len(dropped)} value(s) from Claude were discarded because their quoted source could not be found in the report: '
+                             + ', '.join(dropped[:12]) + ('…' if len(dropped) > 12 else ''))
     meta['_method'] = f'Claude ({CLAUDE_MODEL})'
     return meta
 
@@ -1609,140 +2244,107 @@ def parse_report_regex(text: str) -> dict:
     """Rule-based extraction (kept under its old name for the Colab notebook)."""
     meta = extract(text)
     meta['_method'] = 'rule-based'
+    code, name = detect_language(text)
+    meta['language'] = name
+    meta['notes'].extend(PDF_NOTES)
+    if code != 'en':
+        meta['notes'].insert(0, f'This report appears to be in {name}. The built-in patterns read English methods text, so most fields '
+                                f'will be empty – please fill them in during the review step (or use an English version of the report).')
     return meta
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  5. Web server
+#  5. Running the tool: local web page or command line
 # ════════════════════════════════════════════════════════════════════════════
 
-def safe_name(name):
-    return re.sub(r'[^A-Za-z0-9._-]+', '_', name).strip('_') or 'file'
+REPORT_TYPES = ('.doc', '.docx', '.pdf', '.txt')
 
 
-def parse_multipart(content_type, body):
-    """Minimal multipart/form-data parser that keeps file bytes exactly as sent."""
-    m = re.search(r'boundary=(?P<b>[^;]+)', content_type)
-    if not m: raise ValueError('Missing multipart boundary.')
-    delim = b'--' + m.group('b').strip().strip('"').encode()
-    parts = {}
-    for raw in body.split(delim)[1:]:
-        if raw.startswith(b'--'): break                       # closing delimiter
-        if raw.startswith(b'\r\n'): raw = raw[2:]
-        if raw.endswith(b'\r\n'): raw = raw[:-2]             # the CRLF that precedes the next delimiter
-        head_blob, sep, payload = raw.partition(b'\r\n\r\n')
-        if not sep: continue
-        headers = head_blob.decode('utf-8', errors='replace')
-        disp = re.search(r'Content-Disposition: form-data;\s*(.*)', headers, re.I)
-        nm = re.search(r'name="([^"]+)"', disp.group(1)) if disp else None
-        if not nm: continue
-        fn = re.search(r'filename="([^"]*)"', disp.group(1))
-        parts[nm.group(1)] = (fn.group(1) if fn else nm.group(1), payload)
-    return parts
-
-
-def process_upload(report_name: str, report_bytes: bytes, template_bytes: bytes, api_key: str = '') -> dict:
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    job = uuid.uuid4().hex[:10]
-    with tempfile.TemporaryDirectory() as tmp:                 # uploads are never kept
-        rp = Path(tmp) / safe_name(Path(report_name or 'report.txt').name)
-        tp = Path(tmp) / 'template.xlsx'
-        rp.write_bytes(report_bytes); tp.write_bytes(template_bytes)
-        text = extract_report_text(rp)
-        if len(text.strip()) < 200:
-            raise ValueError('Very little text could be read from the report – is it a scanned PDF?')
-        method = 'rule-based'
-        if api_key:
-            try:
-                meta = facts_from_claude(parse_with_claude(text, api_key)); method = 'claude-ai'
-            except Exception as e:
-                meta = parse_report_regex(text)
-                meta['notes'].append(f'Claude extraction failed ({str(e)[:120]}); rule-based extraction used instead')
-        else:
-            meta = parse_report_regex(text)
-        out_name = f'FAIRe_filled_{safe_name(project_values(meta, "x")["project_id"] or "project")}_{job}.xlsx'
-        summary = fill_workbook(tp, meta, Path(report_name).name, OUTPUT_DIR / out_name)
-    summary.update(downloadUrl=f'/download/{out_name}', outputName=out_name, parsingMethod=method)
+def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=None) -> dict:
+    """Read one report, fill the template, and write <name>_FAIRe.xlsx plus <name>_review.csv
+    (every value with the sentence it came from) into out_dir."""
+    import csv
+    report_path, out_dir = Path(report_path), Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    text = extract_report_text(report_path)
+    meta = parse_report_regex(text)
+    stem = name or re.sub(r'[^A-Za-z0-9._-]+', '_', report_path.stem).strip('_') or 'report'
+    out = out_dir / f'{stem}_FAIRe.xlsx'
+    summary = fill_workbook(template_path or TEMPLATE_PATH, meta, report_path.name, out)
+    with open(out_dir / f'{stem}_review.csv', 'w', newline='', encoding='utf-8') as fh:
+        w = csv.writer(fh)
+        w.writerow(['section', 'field', 'assay', 'value', 'source sentence in the report'])
+        for it in review_items(meta):
+            if it['value'] and not it['generated']:
+                w.writerow([it['section'], it['term'], it.get('assay') or ('all samples' if it['scope'] == 'samples' else ''),
+                            it['value'], it['evidence'] or ''])
+    summary['output'] = str(out)
     return summary
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _cors(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
-    def do_OPTIONS(self):
-        self.send_response(204); self._cors(); self.end_headers()
+    """Serves the same browser page as the online version, plus the bundled template."""
 
     def do_GET(self):
         path = unquote(self.path.split('?', 1)[0])
-        if path == '/':
-            self._serve(STATIC_DIR / 'index.html', 'text/html; charset=utf-8')
-        elif path.startswith('/static/'):
-            tgt = (STATIC_DIR / path[len('/static/'):]).resolve()
-            if STATIC_DIR.resolve() not in tgt.parents: return self.send_error(404)
-            ct = {'.css': 'text/css', '.js': 'application/javascript', '.png': 'image/png', '.svg': 'image/svg+xml'}.get(tgt.suffix, 'text/html; charset=utf-8')
-            self._serve(tgt, ct)
-        elif path == '/template':
-            if TEMPLATE_PATH.is_file():
-                self._serve(TEMPLATE_PATH, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', attachment=True)
-            else:
-                self.send_response(302); self.send_header('Location', TEMPLATE_URL); self.end_headers()
-        elif path.startswith('/download/'):
-            self._serve(OUTPUT_DIR / safe_name(path[len('/download/'):]),
-                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', attachment=True)
-        else:
-            self.send_error(404)
+        if path in ('/', '/index.html'):
+            return self._serve(APP_DIR / 'index.html', 'text/html; charset=utf-8')
+        if path.startswith('/template/'):
+            target = (APP_DIR / 'template' / Path(path).name)
+            if target.suffix == '.xlsx' and target.is_file():
+                return self._serve(target, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        self.send_error(404)
 
     do_HEAD = do_GET
 
-    def do_POST(self):
-        if self.path != '/api/fill': return self.send_error(404)
-        try:
-            length = int(self.headers.get('Content-Length', '0'))
-            form = parse_multipart(self.headers.get('Content-Type', ''), self.rfile.read(length))
-            if 'report' not in form or not form['report'][1]:
-                raise ValueError('Please choose a report file.')
-            template_bytes = form.get('template', ('', b''))[1]
-            if not template_bytes:                      # no template chosen: use the bundled official copy
-                if not TEMPLATE_PATH.is_file():
-                    raise ValueError('Please choose the FAIRe template workbook.')
-                template_bytes = TEMPLATE_PATH.read_bytes()
-            key_field = form.get('apiKey', ('', b''))[1].decode('utf-8', errors='replace').strip()
-            api_key = key_field or os.environ.get('ANTHROPIC_API_KEY', '')
-            self._json(process_upload(form['report'][0], form['report'][1], template_bytes, api_key))
-        except Exception as exc:
-            self._json({'error': str(exc)}, 500)
-
-    def _serve(self, target, content_type, attachment=False):
-        if not Path(target).is_file(): return self.send_error(404)
+    def _serve(self, target, content_type):
         data = Path(target).read_bytes()
         self.send_response(200)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
-        self._cors()
-        if attachment: self.send_header('Content-Disposition', f'attachment; filename="{Path(target).name}"')
         self.end_headers()
         if self.command != 'HEAD': self.wfile.write(data)
 
-    def _json(self, payload, status=200):
-        data = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(data)))
-        self._cors(); self.end_headers(); self.wfile.write(data)
-
     def log_message(self, fmt, *args):
-        print(f'{self.address_string()} {html.escape(fmt % args)}')
+        pass
 
 
-def main():
-    host = os.environ.get('FAIRE_TOOL_HOST', '127.0.0.1')
-    port = int(os.environ.get('FAIRE_TOOL_PORT', '8787'))
-    print(f'FAIRe Metadata Filler at http://{host}:{port}')
-    print('  Claude extraction:', 'enabled' if os.environ.get('ANTHROPIC_API_KEY') else 'off (paste a key in the page, or set ANTHROPIC_API_KEY)')
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+def main(argv=None):
+    import argparse, webbrowser
+    p = argparse.ArgumentParser(
+        description='Fill the FAIRe eDNA metadata template from project reports.',
+        epilog='With no reports given, opens the tool in your web browser. '
+               'Reports are processed on this computer only.')
+    p.add_argument('reports', nargs='*', help='report files (.doc .docx .pdf .txt) or folders containing them')
+    p.add_argument('-t', '--template', help='FAIRe template to fill (default: the bundled FULL template)')
+    p.add_argument('-o', '--out', default=str(OUTPUT_DIR), help='folder for the filled workbooks (default: outputs/)')
+    p.add_argument('--port', type=int, default=int(os.environ.get('FAIRE_TOOL_PORT', '8787')))
+    args = p.parse_args(argv)
+
+    if not args.reports:
+        host = os.environ.get('FAIRE_TOOL_HOST', '127.0.0.1')
+        url = f'http://{host}:{args.port}/'
+        print(f'FAIRe Metadata Filler: {url}   (Ctrl+C to stop)')
+        try: webbrowser.open(url)
+        except Exception: pass
+        ThreadingHTTPServer((host, args.port), Handler).serve_forever()
+        return
+
+    files = []
+    for r in args.reports:
+        r = Path(r)
+        files += sorted(f for f in r.iterdir() if f.suffix.lower() in REPORT_TYPES) if r.is_dir() else [r]
+    if not files: raise SystemExit('No reports found.')
+    stems = [f.stem for f in files]
+    for f in files:
+        name = re.sub(r'[^A-Za-z0-9._-]+', '_', f.stem).strip('_') or 'report'
+        if stems.count(f.stem) > 1: name += '_' + f.suffix.lstrip('.').lower()     # report.doc + report.pdf
+        try:
+            s = process_report(f, args.template, args.out, name)
+            print(f'✓ {f.name}: {len(s["assays"])} assays, {s["sampleRows"]} sample rows -> {s["output"]}')
+            for n in s['notes']: print(f'    note: {n}')
+        except Exception as e:
+            print(f'✗ {f.name}: {e}')
 
 
 if __name__ == '__main__':
@@ -1809,11 +2411,62 @@ async function claudeExtract(py, text, key) {
   return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
-let outBytes = null, outName = 'FAIRe_filled.xlsx';
-$('runBtn').addEventListener('click', async () => {
-  const rpt = $('rpt').files[0], tpl = $('tpl').files[0];
+let outBytes = null, outName = 'FAIRe_filled.xlsx', items = [], method = '';
+const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+$('claudeConsent').addEventListener('change', e => {
+  $('apiKey').disabled = !e.target.checked;
+  if (!e.target.checked) $('apiKey').value = '';
+});
+
+async function loadTemplate(py) {
+  const tpl = $('tpl').files[0];
+  let bytes;
+  if (tpl) bytes = await readBytes(tpl);
+  else {
+    try {
+      const r = await fetch('template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx');
+      if (!r.ok) throw new Error();
+      bytes = new Uint8Array(await r.arrayBuffer());
+    } catch (e) {
+      throw new Error('The built-in template can only be loaded when the page is opened from its web address. Please choose the template file in the second box (it is in the "template" folder).');
+    }
+  }
+  py.FS.writeFile('/faire/template.xlsx', bytes);
+}
+
+function renderReview() {
+  const showEmpty = $('showEmpty').checked, showGen = $('showGenerated').checked;
+  const isMissing = v => !v || /^(missing:|not applicable)/.test(v);
+  let html = '', section = '';
+  for (const it of items) {
+    if (isMissing(it.value) && !showEmpty) continue;
+    if (it.generated && !showGen && !isMissing(it.value)) continue;
+    if (it.section !== section) { section = it.section; html += `<div class="rv-section">${esc(section)}</div>`; }
+    const src = it.generated ? '<div class="rv-src gen">Set by the tool (FAIRe rules or the report structure)</div>'
+      : it.evidence ? `<div class="rv-src">From the report: <q>${esc(it.evidence)}</q></div>`
+      : isMissing(it.value) ? '<div class="rv-src none">Not stated in the report – type a value if you know it</div>'
+      : '<div class="rv-src none">No source sentence – please check</div>';
+    const val = isMissing(it.value) ? '' : it.value;
+    html += `<div class="rv-row"><div class="rv-term">${esc(it.term)}${it.assay ? `<br><span class="rv-assay">${esc(it.assay)}</span>` : ''}${it.scope === 'samples' ? '<br><span class="rv-assay">all samples</span>' : ''}</div>
+      <div class="rv-val"><textarea data-id="${esc(it.id)}" data-orig="${esc(val)}" rows="${Math.min(4, Math.ceil((val.length || 1) / 70))}">${esc(val)}</textarea>${src}</div></div>`;
+  }
+  $('reviewBody').innerHTML = html;
+  for (const ta of $('reviewBody').querySelectorAll('textarea')) {
+    const prev = edits[ta.dataset.id];
+    if (prev !== undefined) { ta.value = prev; ta.classList.add('changed'); }
+    ta.addEventListener('input', () => { edits[ta.dataset.id] = ta.value; ta.classList.toggle('changed', ta.value !== ta.dataset.orig); });
+  }
+}
+let edits = {};
+$('showEmpty').addEventListener('change', renderReview);
+$('showGenerated').addEventListener('change', renderReview);
+
+$('readBtn').addEventListener('click', async () => {
+  const rpt = $('rpt').files[0];
   if (!rpt) { setStatus('Please choose your report.', 0); return; }
-  $('runBtn').disabled = true; $('resultCard').classList.add('hidden'); outBytes = null;
+  $('readBtn').disabled = true; $('resultCard').classList.add('hidden'); $('reviewCard').classList.add('hidden');
+  outBytes = null; edits = {};
   try {
     setStatus('Starting the Python engine…', 15);
     const py = await loadEngine();
@@ -1824,43 +2477,51 @@ $('runBtn').addEventListener('click', async () => {
       setStatus('Reading the PDF…', 30);
       py.FS.writeFile('/faire/report.txt', await pdfText(rptBuf)); reportPath = '/faire/report.txt';
     } else py.FS.writeFile(reportPath, rptBuf);
-    let tplBytes;
-    if (tpl) tplBytes = await readBytes(tpl);
-    else {
-      try {
-        const r = await fetch('template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx');
-        if (!r.ok) throw new Error();
-        tplBytes = new Uint8Array(await r.arrayBuffer());
-      } catch (e) {
-        throw new Error('The built-in template can only be loaded when the page is opened from its web address. Please choose the template file in the second box (it is in the "template" folder).');
-      }
-    }
-    py.FS.writeFile('/faire/template.xlsx', tplBytes);
-    setStatus('Extracting metadata from the report…', 45);
+    setStatus('Reading the report…', 45);
     py.globals.set('report_path', reportPath);
     py.globals.set('report_name', rpt.name);
-    py.runPython("text = faire.extract_report_text(report_path)");
+    py.runPython("text = faire.extract_report_text(report_path)\nmeta = faire.parse_report_regex(text)");
+    method = 'Built-in reader (private)';
     const key = $('apiKey').value.trim();
-    let method = 'Rule-based (built-in patterns)';
-    py.runPython("meta = faire.parse_report_regex(text)");
-    if (key) {
+    if (key && $('claudeConsent').checked) {
       try {
         setStatus('Asking Claude to read the report…', 55);
         py.globals.set('reply', await claudeExtract(py, py.globals.get('text'), key));
-        py.runPython("meta = faire.facts_from_claude(faire.json_from_reply(reply))");
-        method = 'Claude AI';
+        py.runPython("lang_note = [n for n in meta['notes'] if n.startswith('This report appears')]\nmeta = faire.facts_from_claude(faire.json_from_reply(reply), text)");
+        method = 'Claude (with quote check)';
       } catch (e) {
-        py.runPython("meta = faire.parse_report_regex(text)");
         py.globals.set('err', String(e.message || e));
-        py.runPython("meta['notes'].append('Claude extraction failed (' + err[:120] + '); built-in patterns were used instead')");
+        py.runPython("meta['notes'].append('Claude could not be used (' + err[:120] + '); the built-in reader was used instead')");
       }
     }
-    setStatus('Writing the FAIRe workbook…', 80);
-    const summary = JSON.parse(py.runPython("json.dumps(faire.fill_workbook('/faire/template.xlsx', meta, report_name, '/faire/out.xlsx'))"));
+    items = JSON.parse(py.runPython("json.dumps(faire.review_items(meta))"));
+    const notes = JSON.parse(py.runPython("json.dumps(meta.get('notes') or [])"));
+    const found = items.filter(i => i.value && !/^(missing:|not applicable)/.test(i.value) && !i.generated);
+    $('reviewSummary').textContent = `${found.length} values found (${found.filter(i => i.evidence).length} with the sentence they came from) · ${method}. Edit anything that's wrong; empty a box if the report doesn't really say it.`;
+    $('reviewNotes').innerHTML = notes.length ? '<strong>Please note:</strong><ul style="margin:.3rem 0 0 1.1rem">' + notes.map(n => `<li>${esc(n)}</li>`).join('') + '</ul>' : '';
+    $('reviewNotes').classList.toggle('hidden', !notes.length);
+    renderReview();
+    $('reviewCard').classList.remove('hidden');
+    setStatus('Check the values, then click "Fill workbook with these values".', 70);
+    $('reviewCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    console.error(e);
+    setStatus('Error: ' + (e.message || e).toString().split('\n').filter(Boolean).pop(), 100);
+  } finally { $('readBtn').disabled = false; }
+});
+
+$('fillBtn').addEventListener('click', async () => {
+  $('fillBtn').disabled = true;
+  try {
+    const py = await loadEngine();
+    setStatus('Writing the FAIRe workbook…', 85);
+    await loadTemplate(py);
+    py.globals.set('edits_json', JSON.stringify(edits));
+    const summary = JSON.parse(py.runPython("faire.apply_review(meta, json.loads(edits_json))\njson.dumps(faire.fill_workbook('/faire/template.xlsx', meta, report_name, '/faire/out.xlsx'))"));
     outBytes = py.FS.readFile('/faire/out.xlsx');
     outName = `FAIRe_filled_${summary.projectId || 'project'}.xlsx`;
     $('rProject').textContent = summary.projectTitle || '—';
-    $('rMethod').textContent = method;
+    $('rMethod').textContent = method + (Object.keys(edits).length ? ` + ${Object.keys(edits).length} of your edits` : '');
     $('rLakes').textContent = summary.lakes;
     $('rAssays').textContent = (summary.assays || []).join(', ');
     $('rSamples').textContent = summary.sampleRows;
@@ -1868,12 +2529,12 @@ $('runBtn').addEventListener('click', async () => {
     const notes = $('rNotes'); notes.innerHTML = '';
     for (const n of summary.notes || []) { const li = document.createElement('li'); li.textContent = n; notes.appendChild(li); }
     $('notesBlock').classList.toggle('hidden', !(summary.notes || []).length);
-    setStatus('Done – review the summary, then download your workbook.', 100);
+    setStatus('Done – download your workbook.', 100);
     $('resultCard').classList.remove('hidden');
   } catch (e) {
     console.error(e);
     setStatus('Error: ' + (e.message || e).toString().split('\n').filter(Boolean).pop(), 100);
-  } finally { $('runBtn').disabled = false; }
+  } finally { $('fillBtn').disabled = false; }
 });
 
 $('dlBtn').addEventListener('click', () => {
