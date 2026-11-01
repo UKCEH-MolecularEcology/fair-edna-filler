@@ -206,6 +206,45 @@ try:
 except RuntimeError:
     check(True, 'refuses to send reports to another computer')
 
+# ── 6. title, authors and contact from the first page of a paper or report ──
+paper = """Mol Ecol Resour. 2024;24:e13903.  | 1 of 15
+https://doi.org/10.1111/1755-0998.13903
+RESOURCE ARTICLE
+Evaluating the use of lake sedimentary DNA in palaeolimnology:
+A comparison with long-term monitoring
+Amy C. Thorpe1,2 | Eleanor B. Mackay3 | Daniel S. Read1
+1UK Centre for Ecology & Hydrology (UKCEH), Wallingford, UK
+Correspondence
+Amy C. Thorpe (amytho@ceh.ac.uk)
+"""
+fm = server.front_matter(paper)
+check(fm.get('project_title') == 'Evaluating the use of lake sedimentary DNA in palaeolimnology: A comparison with long-term monitoring',
+      'paper title found under journal header lines')
+check(fm.get('recorded_by') == 'Amy C. Thorpe | Eleanor B. Mackay | Daniel S. Read', 'author names found (superscripts removed)')
+check('amytho@ceh.ac.uk' in (fm.get('project_contact') or '') and 'Centre for Ecology' in (fm.get('institution') or ''),
+      'corresponding e-mail and first affiliation found')
+report = """Page 1 of 39  [Report title and catalogue code]
+GCN sample analysis via single
+species assay and metabarcoding
+Extraction and analysis of Great Crested Newt eDNA samples
+April 2024
+Natural England Commissioned Report NECR534
+
+Page 2 of 39 GCN sample analysis via single species assay and metabarcoding
+NECR534
+Report details
+Author(s)
+Helen C. Rees, Steven D. Kane
+Contractor
+RSK ADAS Ltd.
+Keywords
+eDNA
+"""
+fm = server.front_matter(report)
+check(fm.get('project_title') == 'GCN sample analysis via single species assay and metabarcoding', 'report title found; subtitle left out')
+check(fm.get('recorded_by') == 'Helen C. Rees | Steven D. Kane' and fm.get('institution') == 'RSK ADAS Ltd',
+      'authors and contractor read from the report details page')
+
 print()
 if failures:
     print(f'{len(failures)} check(s) failed.')

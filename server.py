@@ -405,6 +405,131 @@ def strip_line_numbers(text: str) -> str:
     return text
 
 
+# ── front matter: title, authors, contact, institution (reports and papers) ──
+FM_LABEL = (r'(?:Authors?(?:\(s\))?|(?:Natural England|Environment Agency.s) Project [Mm]anager|(?:Research )?Contractors?|Keywords|'
+            r'Acknowledge?ments|Citation|Dissemination Status|Project Number|Report details|Foreword|Further Information|Copyright)')
+JUNK_ANY = re.compile(r'Page \d+ of \d+|\[Report title|\bdoi\b|doi\.org|https?://|www\.|©|\b(?:19|20)\d\d\s*[;,]\s*\d+|'
+                      r'\b(?:Received|Revised|Accepted|Published|Keywords|Citation)\b\s*:|Commissioned Report|^\d+ of \d+|\d of \d+\s*$|'
+                      r'\bet al\.?\s*$|\((?:19|20)\d\d\)\s*\d+\s*:\s*\d+|wileyonlinelibrary|journal/|Open Access|licen[cs]e|^\W*$', re.I)
+JUNK_FULL = re.compile(r'(?:(?:RESEARCH|RESOURCE|ORIGINAL|REVIEW|METHODS?)\s+)?(?:ARTICLE|RESEARCH|PAPER)(?:\s+OPEN ACCESS)?|Article|'
+                       r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}|'
+                       r'Report\s*[–-].*|[A-Z]{2,}[\d/]+\S*|[ivx]+|\d+|(?:Edition|Version)\b.*|Natural England|Environment Agency|'
+                       r'Evidence Project Final Report|Project identification', re.I)
+ORG_WORDS = (r'University|Universit\w+|Institut\w*|Centre|Center|Agency|Administration|Organi[sz]ation|Survey|Ltd\.?|Limited|'
+             r'Museum|Council|Commission|Authority|Laborator\w+|College|Foundation|Cefas|CSIRO|NOAA|Division|Society|Trust|plc|LLP|Inc\.?|'
+             r'Consultancy|Consulting')
+GENERIC_EMAIL = re.compile(r'^(?:enquiries|info|contact|admin|office|help|support|noreply|strategicevidence)@', re.I)
+FUNCTION_WORDS = re.compile(r'\b(?:of|the|in|for|on|to|with|from|a|an|by|using|via|as|at|into|across|through|is|are)\b')
+
+
+def _junk(s):
+    return bool(JUNK_ANY.search(s) or JUNK_FULL.fullmatch(s))
+
+
+def _labelled_block(text, label, max_lines=8):
+    """Lines under a stand-alone label such as 'Authors' or 'Contractor:' (not a table-of-contents line)."""
+    for m in re.finditer(r'(?im)^[ \t]*' + label + r'[ \t]*:?[ \t]*$', text[:60000]):
+        out = []
+        for line in text[m.end():].split('\n')[1:max_lines + 1]:
+            s = norm(line)
+            if not s:
+                if out: break
+                continue
+            if re.fullmatch(FM_LABEL + r'\s*:?', s): break
+            out.append(s)
+        if out: return out
+    return []
+
+
+def _org_from(line):
+    """'1Department of X, University of Y, City, Country' -> 'University of Y'."""
+    line = re.sub(r'^\s*[\d*†,]+\s*', '', line).rstrip(' .')
+    if not re.search(r'\d', line) and re.search(ORG_WORDS, line) and len(line) < 120 and not re.match(r'(?:Department|School|Faculty)\b', line):
+        return norm(line)
+    parts = [p.strip() for p in re.split(r',|\|', line) if p.strip()]
+    best = [p for p in parts if re.search(ORG_WORDS, p) and not re.match(r'(?:Department|Dept|School|Faculty|Group)\b', p)]
+    org = (best or [p for p in parts if re.search(ORG_WORDS, p)] or [None])[0]
+    return norm(org).rstrip(' ,.;') if org and len(org) < 120 else None
+
+
+def _names(s):
+    s = re.sub(r'\([^)]*@[^)]*\)|\S+@\S+', '', s)
+    s = re.sub(r'(?<=[A-Za-zÀ-ÿ.])\s?\d+(?:\s?,\s?\d+)*[*†‡§]*|[*†‡§]+', '', s)
+    out = []
+    for p in re.split(r'\s*(?:,|\||&|\band\b)\s*', s):
+        p = norm(re.sub(r'^(?:Dr\.?|Prof\.?|Professor)\s+', '', p.strip(' .;')))
+        if re.fullmatch(r"[A-ZÀ-Ý][\w'’‑\-.]+(?:\s+[A-ZÀ-Ý][\w'’‑\-.]*){1,4}", p) and not re.search(ORG_WORDS, p) \
+                and not re.fullmatch(r'[A-Z]\.?', p.split()[-1]): out.append(p)
+    return out
+
+
+def _authorish(s):
+    return len(_names(s)) >= 2 and not FUNCTION_WORDS.search(re.sub(r'\([^)]*\)', '', s)) or \
+           bool(re.match(r'\d+\s*[A-Z]', s) and re.search(ORG_WORDS, s))
+
+
+def front_matter(text: str) -> dict:
+    """Title, authors, contact e-mail and institution from the first pages of a report or paper."""
+    head = text[:12000]
+    fm = {}
+    lines = [norm(l) for l in head.split('\n')[:100]]
+    block, start, end = [], None, None
+    for i, s in enumerate(lines):
+        words = len(' '.join(block).split())
+        if not s or _junk(s):
+            if block and words >= 4: end = i; break
+            block = []; continue
+        if _authorish(s):
+            if words >= 4: end = i; break
+            block = []; continue
+        if not block: start = i
+        block.append(s)
+        if len(' '.join(block)) > 300: block = []
+    title = re.sub(r'(\w)- (\w)', r'\1-\2', norm(' '.join(block))) if len(' '.join(block).split()) >= 4 else ''
+    if title:
+        rest = norm(text[:20000])      # a running page header repeating the title shows where a subtitle starts
+        for m in list(re.finditer(re.escape(title[:30]), rest))[1:]:
+            tw, rw = title.split(), rest[m.start(): m.start() + len(title) + 80].split()
+            k = 0
+            while k < min(len(tw), len(rw)) and tw[k].strip('.,:;') == rw[k].strip('.,:;'): k += 1
+            if 4 <= k <= len(tw) - 3: title = ' '.join(tw[:k]); break   # only cut off a real subtitle
+        fm['project_title'] = title.rstrip(' .:')
+    auth = _labelled_block(text, r'Authors?(?:\(s\))?')
+    if auth:
+        one_per_line = all(not l.rstrip().endswith(',') and len(_names(l)) >= 1 and
+                           _names(re.split(r',|&|\band\b', l)[-1]) for l in auth)
+        names = _names((', ' if one_per_line else ' ').join(auth))
+        if names: fm['recorded_by'], fm['_ev_authors'] = ' | '.join(names), 'Authors: ' + ' '.join(auth)
+        em = re.search(r'([\w.+\-]+@[\w\-]+\.[\w.\-]*\w)', ' '.join(auth))
+        if em: fm['project_contact'] = em.group(1)
+    elif end is not None:
+        by = []
+        for s in lines[end:end + 6]:
+            if not s or _junk(s): continue
+            if re.match(r'\d+\s*[A-Z]', s) and re.search(ORG_WORDS, s): break
+            if not _authorish(s) and not by: break
+            by.append(s)
+            if not re.search(r'[,|&]\s*$|\band\s*$|\b[A-Z]\.\s*$', s): break
+        names = _names(' '.join(by))
+        if names: fm['recorded_by'], fm['_ev_authors'] = ' | '.join(names), ' '.join(by)[:300]
+    con = _labelled_block(text, r'(?:Research )?Contractors?')
+    if con:
+        org = next((o for o in map(_org_from, con) if o), None) or (con[0].split(',')[0] if len(con) <= 4 else None)
+        if org: fm['institution'], fm['_ev_institution'] = org.rstrip('.'), 'Contractor: ' + ' '.join(con)[:300]
+    if not fm.get('project_contact'):
+        for m in re.finditer(r'(?:Correspond\w*|Corresponding author\w*|e-?mail)\s*:?\s*(.{0,160})', head, re.I | re.S):
+            em = re.search(r'([\w.+\-]+@[\w\-]+\.[\w.\-]*\w)', m.group(1))
+            if em and not GENERIC_EMAIL.match(em.group(1)):
+                nm = re.search(r'([A-Z][\w.\- ]{3,40}?)\s*\(\s*' + re.escape(em.group(1)), m.group(1))
+                fm['project_contact'] = (norm(nm.group(1)) + f' ({em.group(1)})') if nm else em.group(1)
+                fm['_ev_contact'] = norm(m.group(0))[:200]; break
+    if not fm.get('institution'):
+        aff = re.search(r'(?m)^\s*1\s*([A-Z][^\n]{8,200})$', head)
+        org = _org_from(aff.group(1)) if aff else None
+        if org: fm['institution'], fm['_ev_institution'] = org, norm(aff.group(0))
+    return fm
+
+
 HEADING = r'^\s*(?:\d+(?:\.\d+)*\.?\s*|[IVX]+\.\s*)?'
 METHODS_H = re.compile(HEADING + r'(?:MATERIALS? (?:AND|&) METHODS?|Materials? (?:and|&) [Mm]ethods?|METHODS?|Methods?|METHODOLOGY|Methodology|Experimental (?:design|procedures))\s*$', re.M)
 END_H = re.compile(HEADING + r'(?:RESULTS?(?: AND DISCUSSION)?|Results?(?: and [Dd]iscussion)?|DISCUSSION|Discussion|CONCLUSIONS?|Conclusions?|REFERENCES|References|ACKNOWLEDGE?MENTS?|Acknowledge?ments?)\s*$', re.M)
@@ -421,7 +546,7 @@ def methods_text(text: str):
 
 
 def extract(text: str) -> dict:
-    text = text.replace('\u00a0', ' ').replace('\ufeff', '')
+    text = text.replace('\u00a0', ' ').replace('\ufeff', '').replace('ﬁ', 'fi').replace('ﬂ', 'fl').replace('ﬀ', 'ff').replace('\u2011', '-')
     text = strip_line_numbers(text)
     text = re.sub('[\ue000-\uf8ff]', '', text)                     # private-use glyphs (bullets)
     text = re.sub(r'(?<=[a-z])-\n(?=[a-z])', '-', text)              # "high-\nfidelity"
@@ -457,16 +582,23 @@ def extract(text: str) -> dict:
         for line in tm.group(1).splitlines():
             if not norm(line) or re.match(r'\s*\d+\.', line) or re.match(r'\s*(Contractor|organisation)', line, re.I): break
             title_lines.append(norm(line))
-    meta['project_title'] = ' '.join(title_lines) or find(r'^\s*(.{20,200})\n', text, flags=re.M)
+    fm = front_matter(text)
+    meta['project_title'] = ' '.join(title_lines) or fm.get('project_title')
     cite('project_title', 'Project title: ' + meta['project_title'] if title_lines else meta['project_title'])
-    org = after_label(text, r'organisation\(s\)') or after_label(text, r'Contractor')
+    org = after_label(text, r'organisation\(s\)') if title_lines else None
+    meta['institution'] = org or fm.get('institution')
+    if meta['institution']: cite('institution', f'Contractor organisation(s): {org}' if org else fm.get('_ev_institution'))
+    if not meta['institution']:
+        um = re.search(r'\bUKCEH\b|Centre for Ecology (?:&|and) Hydrology', flat[:6000])
+        if um: meta['institution'] = 'UK Centre for Ecology & Hydrology'; cite('institution', um)
     for acr, (name, ror) in INSTITUTIONS.items():
-        if (org and acr in org) or re.search(r'\b' + acr + r'\b', flat):
-            meta['institution'], meta['institution_ror'] = name, ror
-            cite('institution', (f'Contractor organisation(s): {org}' if org and acr in org else at(re.search(r'\b' + acr + r'\b', flat).start())))
-            break
-    else:
-        meta['institution'] = org
+        if meta['institution'] and (acr in meta['institution'] or name.lower() in meta['institution'].lower() or
+                                    re.search(r'Centre for Ecology (?:&|and) Hydrology', meta['institution'])):
+            meta['institution'], meta['institution_ror'] = name, ror; cite('institution_ror', evidence.get('institution'))
+    for k in ('recorded_by', 'project_contact'):
+        if fm.get(k): meta[k] = fm[k]
+    if fm.get('recorded_by'): cite('recorded_by', fm.get('_ev_authors'))
+    if fm.get('project_contact'): cite('project_contact', fm.get('_ev_contact') or fm.get('_ev_authors'))
     meta['start_date'] = parse_date(after_label(text, r'start date') or '')
     if meta['start_date']: cite('start_date', 'start date: ' + (after_label(text, r'start date') or ''))
     meta['end_date'] = parse_date(after_label(text, r'end date') or '')
@@ -1742,10 +1874,11 @@ SAMPLE_TERMS = ['samp_collect_method', 'samp_size', 'samp_size_unit', 'env_broad
                 'prepped_samp_store_sol', 'nucl_acid_ext', 'nucl_acid_ext_kit', 'nucl_acid_ext_lysis', 'nucl_acid_ext_sep',
                 'nucl_acid_ext_modify', 'concentration_method']
 GENERATED = {'project_id', 'assay_type', 'pcr_0_1', 'neg_cont_0_1', 'pos_cont_0_1', 'checkls_ver', 'mod_date', 'rightsHolder',
-             'recordedBy', 'assay_name', 'target_gene', 'habitat_natural_artificial_0_1', 'filter_passive_active_0_1',
+             'assay_name', 'target_gene', 'habitat_natural_artificial_0_1', 'filter_passive_active_0_1',
              'otu_raw_description', 'tax_assign_cat'}
 # FAIRe term -> key under which the extractor recorded its source sentence
 EVIDENCE_KEY = {
+    'recordedBy': 'recorded_by', 'project_contact': 'project_contact',
     'institution': 'institution', 'institutionID': 'institution', 'project_name': 'project_title',
     'bibliographicCitation': 'project_title', 'rightsHolder': 'institution',
     'sterilise_method': 'sterilise_method', 'neg_cont_0_1': 'neg_controls', 'pos_cont_0_1': 'pos_controls',
@@ -2492,7 +2625,145 @@ def parse_report_regex(text: str) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  5. Running the tool: local web page or command line
+#  6. Google Colab: a point-and-click review screen (used by the notebook)
+# ════════════════════════════════════════════════════════════════════════════
+
+_COLAB: dict = {}
+_CSS = """<style>
+.fx{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;color:#1d2b2a}
+.fx h3{margin:.2em 0 .4em;color:#1A3B8B}.fx .sum{background:#EBF5F3;border-radius:8px;padding:.6em .9em;margin:.4em 0}
+.fx .b{display:inline-block;border-radius:99px;padding:.05em .6em;font-weight:600;font-size:12px;margin-right:.3em}
+.fx .ok{background:#E2EAD9;color:#3A5020}.fx .ck{background:#FFF1C2;color:#7A5600}.fx .ms{background:#EEF1F1;color:#5F6B6A}
+.fx ul{margin:.3em 0 .3em 1.2em;padding:0}.fx .src{color:#5F6B6A;font-size:12px;font-style:italic}
+.fx .why{color:#7A5600;font-size:12px}.fx .term{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+</style>"""
+
+
+def _esc(t):
+    return html.escape(str(t or ''))
+
+
+def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_confidential=False):
+    """Notebook step: upload a report, read it, and show the review screen with a Fill button."""
+    from google.colab import files as colab_files
+    from IPython.display import display, HTML
+    import urllib.request
+    display(HTML(_CSS + '<div class="fx"><h3>1 · Upload your report</h3>(.doc, .docx, .pdf or .txt)</div>'))
+    up = colab_files.upload()
+    if not up: return display(HTML('<div class="fx">No file chosen – run this cell again.</div>'))
+    report = Path(list(up)[0])
+    template = APP_DIR / 'template' / TEMPLATE_FILE
+    if use_my_own_template:
+        display(HTML('<div class="fx">Upload your FAIRe <b>template</b> (.xlsx):</div>'))
+        template = Path(list(colab_files.upload())[0])
+    elif not template.exists():
+        template = Path(TEMPLATE_FILE)
+        urllib.request.urlretrieve('https://github.com/UKCEH-MolecularEcology/fair-edna-filler/raw/main/template/' + TEMPLATE_FILE, template)
+    profile = None
+    if use_a_profile:
+        display(HTML('<div class="fx">Upload your <b>profile</b> (.json):</div>'))
+        profile = json.loads(Path(list(colab_files.upload())[0]).read_text(encoding='utf-8'))
+    key = ''
+    if report_is_not_confidential:
+        try:
+            from google.colab import userdata
+            key = userdata.get('ANTHROPIC_API_KEY') or ''
+        except Exception:
+            key = ''
+        if not key:
+            from getpass import getpass
+            key = getpass('Claude API key: ').strip()
+    text = extract_report_text(report)
+    meta = prepare(text, profile)
+    if key:
+        try: second_opinion(meta, facts_from_claude(parse_with_claude(text, key), text), 'Claude')
+        except Exception as e: meta['notes'].append(f'Claude could not be used ({e}).')
+    items = review(meta, template)
+    _COLAB.update(meta=meta, items=items, template=template, report=report, profile=profile)
+    _review_screen(items, meta)
+
+
+def _review_screen(items, meta):
+    import ipywidgets as w
+    from IPython.display import display, HTML
+    c = review_summary(items)
+    notes = ''.join(f'<li>{_esc(n)}</li>' for n in meta.get('notes') or [])
+    display(HTML(_CSS + f'''<div class="fx"><h3>2 · Check the values</h3><div class="sum">
+      <span class="b ok">{c["ok"]} accepted automatically</span><span class="b ck">{c["check"]} need a look</span>
+      <span class="b ms">{c["missing"]} not found in the report</span><br>
+      <small>Read with: {_esc(meta.get("_method"))}. Change anything that is wrong – your changes are used when you click
+      <b>Fill workbook</b>. Leave a box empty if the report doesn't say it.</small></div>
+      {f"<b>Please note</b><ul>{notes}</ul>" if notes else ""}</div>'''))
+    boxes = {}
+
+    def rows(sel):
+        out = []
+        for it in sel:
+            val = '' if it['value'].startswith(('missing:', 'not applicable')) else it['value']
+            box = w.Textarea(value=val, layout=w.Layout(width='98%', height='34px' if len(val) < 90 else '64px'))
+            boxes[it['id']] = (box, val)
+            label = f'<span class="term">{_esc(it["term"])}</span>' + (f' <span class="b ms">{_esc(it.get("assay"))}</span>' if it.get('assay') else '') + \
+                    (' <span class="b ms">all samples</span>' if it['scope'] == 'samples' else '')
+            info = (f'<div class="why">{_esc(" · ".join(it.get("reasons") or []))}</div>' if it['status'] == 'check' else '') + \
+                   (f'<div class="src">“{_esc(it["evidence"][:300])}”</div>' if it.get('evidence') else '')
+            out.append(w.VBox([w.HTML(f'<div class="fx">{label}</div>'), box, w.HTML(f'<div class="fx">{info}</div>')],
+                              layout=w.Layout(border_bottom='1px solid #EEF3F2', padding='4px 0')))
+        return w.VBox(out or [w.HTML('<div class="fx">Nothing here.</div>')])
+
+    shown = [it for it in items if not (it['generated'] and it['status'] == 'ok')]
+    tabs = w.Tab(children=[rows([i for i in shown if i['status'] == 'check']),
+                           rows([i for i in shown if i['status'] == 'missing' and i.get('required') in ('M', 'HR')]),
+                           rows([i for i in shown if i['status'] == 'ok'])])
+    for k, t in enumerate([f'Needs a look ({c["check"]})', f'Not found – required ({c["missing_required"]})', f'Accepted ({c["ok"]})']):
+        tabs.set_title(k, t)
+    save = w.Checkbox(value=False, description='Also save my corrections as a profile', indent=False)
+    name = w.Text(value=(_COLAB.get('profile') or {}).get('name', 'my FAIRe profile'), description='Profile name:',
+                  style={'description_width': 'initial'})
+    btn = w.Button(description='Fill workbook and download', button_style='success', icon='download', layout=w.Layout(width='260px'))
+    out = w.Output()
+
+    def go(_):
+        btn.disabled = True
+        with out:
+            out.clear_output()
+            edits = {k: b.value.strip() for k, (b, orig) in boxes.items() if b.value.strip() != orig}
+            colab_fill(edits, save.value, name.value)
+        btn.disabled = False
+
+    btn.on_click(go)
+    display(tabs, HTML(_CSS + '<div class="fx"><h3>3 · Fill the workbook</h3></div>'), w.HBox([save, name]), btn, out)
+
+
+def colab_fill(edits=None, save_profile=False, profile_name='my FAIRe profile'):
+    """Notebook step: apply corrections, write the workbook (and profile) and download them."""
+    from google.colab import files as colab_files
+    from IPython.display import display, HTML
+    meta, template, report = _COLAB['meta'], _COLAB['template'], _COLAB['report']
+    edits = edits or {}
+    apply_review(meta, edits)
+    tmp = Path('FAIRe_filled.xlsx')
+    s = fill_workbook(template, meta, report.name, tmp)
+    out = Path(f"FAIRe_filled_{s['projectId'] or 'project'}.xlsx"); tmp.replace(out)
+    v = s['validation']
+    checks = ''.join(f'<li>⚠️ {_esc(x["sheet"])} · {_esc(x["term"])}: {_esc(x["what"])} ({_esc(x["where"])})</li>' for x in v['problems']) + \
+             ''.join(f'<li>🔧 fixed {_esc(x["sheet"])} · {_esc(x["term"])}: {_esc(x["what"])}</li>' for x in v['fixed'])
+    display(HTML(_CSS + f'''<div class="fx"><div class="sum">✅ <b>{_esc(out.name)}</b> – {s["lakes"]} sites · {len(s["assays"])} assays ·
+      {s["sampleRows"]} sample rows · {s["experimentRows"]} run rows · {len(edits)} of your corrections</div>
+      <ul>{checks or "<li>✅ Passes the FAIRe format, vocabulary and ID checks</li>"}</ul>
+      Next: open it in Excel, fill anything still marked <i>missing: not provided</i>, and validate at
+      <a href="https://shiny.csiro.au/FAIRe-fier/" target="_blank">FAIRe-fier</a>.</div>'''))
+    colab_files.download(str(out))
+    if save_profile and edits:
+        prof = profile_from_review(meta, edits, profile_name, _COLAB.get('profile'))
+        pf = Path(re.sub(r'[^A-Za-z0-9_-]+', '_', profile_name or 'profile') + '.faire-profile.json')
+        pf.write_text(json.dumps(prof, indent=1, ensure_ascii=False), encoding='utf-8')
+        display(HTML(f'<div class="fx">💾 Profile saved: <b>{_esc(pf.name)}</b> ({len(prof["entries"])} corrections). '
+                     'Tick “use a profile” next time to apply them.</div>'))
+        colab_files.download(str(pf))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  7. Running the tool: local web page or command line
 # ════════════════════════════════════════════════════════════════════════════
 
 REPORT_TYPES = ('.doc', '.docx', '.pdf', '.txt')

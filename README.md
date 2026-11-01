@@ -61,7 +61,7 @@ Then choose your report (and, optionally, a saved profile), click **Read report*
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
 
-Open the notebook and run the cells in order: upload your report (and optionally a profile), look at the *needs a look* table (put corrections in the `edits` cell), then fill and download. The official FAIRe FULL template is fetched automatically (tick a box to upload your own, e.g. one made with FAIRe-ator). Needs a Google account.
+Open the notebook and click ▶ on its two cells: **① Set up**, then **② Fill from my report**. Upload your report, check the flagged values in the review screen (no code to edit), and click **Fill workbook and download**. The official FAIRe FULL template is fetched automatically; tick a box to use your own template or a saved profile. Needs a Google account.
 
 ### 3. Python (for coders)
 
