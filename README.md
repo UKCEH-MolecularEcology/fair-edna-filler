@@ -34,7 +34,7 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 | Input | Description |
 |---|---|
 | **Report file** | `.docx`, `.pdf`, `.doc`, or `.txt` |
-| **FAIRe template** | FAIRe full template `.xlsx` — [download here](https://fair-edna.github.io/download.html) |
+| **FAIRe template** | FAIRe FULL template `.xlsx` — [direct download (v1.0.2)](https://github.com/FAIR-eDNA/FAIRe_checklist/raw/main/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx) · [FAIRe download page](https://fair-edna.github.io/download.html) |
 | **Claude API key** *(optional)* | Lets Claude read unusual report layouts — [get a key](https://console.anthropic.com) (paid, usage-based) |
 
 **Output:** A filled `.xlsx` workbook ready to review in Excel and upload to the FAIRe-fier validator.
@@ -51,7 +51,7 @@ Download the ZIP (green **Code** button → *Download ZIP*), extract it, and dou
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
 
-Run entirely in the cloud — no Python or terminal needed. Just open the notebook, run all cells, upload your files, and download the result.
+Run entirely in the cloud — no Python or terminal needed. Open the notebook, choose *Runtime → Run all*, upload your report, and download the result. The official FAIRe FULL template is fetched automatically (you can tick a box to upload your own, e.g. one made with FAIRe-ator).
 
 ---
 

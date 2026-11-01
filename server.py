@@ -1131,10 +1131,44 @@ def build_samples(meta):
     return out
 
 
+def repair_package(pkg: dict) -> int:
+    """Drop relationships that point to parts missing from the file (the official FAIRe
+    template references empty drawing parts that are not in the zip). Returns the count."""
+    import posixpath
+    removed = 0
+    for rels_name in [n for n in pkg if n.startswith('xl/worksheets/_rels/') and n.endswith('.rels')]:
+        rels = pkg[rels_name].decode('utf-8')
+        base = 'xl/worksheets'
+        dead = []
+        for m in re.finditer(r'<Relationship\b[^>]*/>', rels):
+            el = m.group(0)
+            if 'TargetMode="External"' in el: continue
+            rid = re.search(r'\bId="([^"]+)"', el).group(1)
+            tgt = re.search(r'\bTarget="([^"]+)"', el).group(1)
+            path = tgt.lstrip('/') if tgt.startswith('/') else posixpath.normpath(posixpath.join(base, tgt))
+            if path not in pkg: dead.append((el, rid))
+        if not dead: continue
+        sheet_name = 'xl/worksheets/' + posixpath.basename(rels_name)[:-len('.rels')]
+        sheet = pkg[sheet_name].decode('utf-8') if sheet_name in pkg else None
+        for el, rid in dead:
+            rels = rels.replace(el, '')
+            if sheet is not None:
+                sheet = re.sub(r'<(?:\w+:)?(?:drawing|legacyDrawing|legacyDrawingHF)\b[^>]*\br:id="' + re.escape(rid) + r'"[^>]*/>', '', sheet)
+            removed += 1
+        pkg[rels_name] = rels.encode('utf-8')
+        if sheet is not None: pkg[sheet_name] = sheet.encode('utf-8')
+    if '[Content_Types].xml' in pkg:
+        ct = pkg['[Content_Types].xml'].decode('utf-8')
+        ct2 = re.sub(r'<Override\b[^>]*PartName="/([^"]+)"[^>]*/>', lambda m: m.group(0) if m.group(1) in pkg else '', ct)
+        pkg['[Content_Types].xml'] = ct2.encode('utf-8')
+    return removed
+
+
 def fill_workbook(template_path, meta: dict, report_filename: str, output_path) -> dict:
     with zipfile.ZipFile(template_path) as z:
         pkg = {i.filename: z.read(i.filename) for i in z.infolist()}
         infos = z.infolist()
+    repair_package(pkg)
     ss = shared_strings(pkg)
     paths = sheet_paths(pkg)
     VOCAB.clear(); VOCAB.update(load_vocab(pkg, paths, ss))
