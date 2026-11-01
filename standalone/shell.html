@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>FAIRe Metadata Filler · UKCEH</title>
+<style>
+:root{
+  --air:#D5EAE6;--water:#4679E1;--land:#90A968;--earth:#D6B7AA;
+  --air-50:#EBF5F3;--air-25:#F5F9F8;--water-20:#D1DEF8;--land-20:#E2EAD9;
+  --earth-40:#EBDBD3;--data-40:#ECFDA9;
+  --text:#1A1A1A;--muted:#5A6672;--radius:8px;--radius-lg:12px;
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 4px 12px rgba(0,0,0,.05);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:var(--air-25);color:var(--text);min-height:100vh;font-size:15px;
+  line-height:1.55;display:flex;flex-direction:column}
+
+/* topbar */
+.topbar{background:#fff;border-bottom:2px solid var(--air);padding:0 2rem;
+  display:flex;align-items:center;justify-content:space-between;height:56px;flex-shrink:0}
+.topbar-left{display:flex;align-items:center;gap:14px}
+.logo-mark{width:32px;height:32px;background:var(--water);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:#fff;
+  font-weight:900;font-size:14px;letter-spacing:-.02em;flex-shrink:0}
+.topbar-title{font-size:14px;font-weight:700;color:var(--text)}
+.topbar-divider{width:1px;height:22px;background:var(--air)}
+.topbar-links{display:flex;gap:1.25rem}
+.topbar-links a{font-size:13px;color:var(--muted);text-decoration:none;transition:color .15s}
+.topbar-links a:hover{color:var(--water)}
+
+/* layout */
+.shell{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:1.75rem;
+  max-width:1080px;margin:1.75rem auto;padding:0 1.5rem 3rem;flex:1}
+@media(max-width:800px){.shell{grid-template-columns:1fr}}
+
+/* hero */
+.hero{background:linear-gradient(135deg,var(--air) 0%,var(--air-50) 55%,#fff 100%);
+  border:1px solid var(--air);border-radius:var(--radius-lg);padding:1.75rem 2rem;margin-bottom:1.25rem}
+.hero h1{font-size:1.3rem;font-weight:700;letter-spacing:-.025em;margin-bottom:.4rem}
+.hero p{font-size:.9rem;color:var(--muted);max-width:54ch}
+.badges{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.9rem}
+.badge{font-size:.72rem;font-weight:700;letter-spacing:.03em;padding:.22rem .6rem;
+  border-radius:100px;background:var(--land-20);color:#3A5020}
+.badge.b{background:var(--water-20);color:#1A3B8B}
+.badge.e{background:var(--earth-40);color:#6B3426}
+
+/* cards */
+.card{background:#fff;border:1px solid #E8F0EE;border-radius:var(--radius-lg);
+  padding:1.4rem;box-shadow:var(--shadow)}
+.card-label{font-size:.73rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--muted);margin-bottom:1rem}
+
+/* drop zones */
+.drop{display:block;border:1.5px dashed var(--air);border-radius:var(--radius);
+  padding:.9rem 1.1rem;cursor:pointer;transition:border-color .15s,background .15s;
+  margin-bottom:.7rem;position:relative;background:var(--air-25)}
+.drop:hover,.drop:focus-within{border-color:var(--water);background:var(--water-20)}
+.drop input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.drop-inner{display:flex;align-items:center;gap:.8rem;pointer-events:none}
+.drop-icon{width:34px;height:34px;border-radius:var(--radius);background:var(--air);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.drop-icon svg{width:17px;height:17px;stroke:var(--water);stroke-width:2;fill:none;
+  stroke-linecap:round;stroke-linejoin:round}
+.drop-lbl{font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.drop-name{font-size:.88rem;font-weight:500;color:var(--text)}
+.drop-hint{font-size:.75rem;color:var(--muted)}
+
+/* api key */
+.key-row{margin:.7rem 0}
+.key-row label{display:flex;align-items:center;gap:.5rem;font-size:.8rem;
+  font-weight:600;color:var(--muted);margin-bottom:.35rem}
+.opt-tag{background:var(--data-40);color:#5A4F00;font-size:.68rem;font-weight:700;
+  padding:.1rem .45rem;border-radius:100px;letter-spacing:.03em}
+.key-row input{width:100%;border:1.5px solid var(--air);border-radius:var(--radius);
+  padding:.5rem .8rem;font-size:.875rem;background:var(--air-25);color:var(--text);
+  outline:none;transition:border-color .15s,background .15s}
+.key-row input:focus{border-color:var(--water);background:#fff}
+
+/* buttons */
+.btn{width:100%;display:flex;align-items:center;justify-content:center;gap:.55rem;
+  padding:.75rem 1.25rem;border-radius:var(--radius);background:var(--water);color:#fff;
+  font-size:.9rem;font-weight:700;border:none;cursor:pointer;letter-spacing:-.01em;
+  margin-top:.7rem;transition:background .15s,transform .1s,box-shadow .15s;
+  box-shadow:0 2px 8px rgba(70,121,225,.28)}
+.btn svg{width:17px;height:17px;stroke:currentColor;stroke-width:2.5;fill:none;
+  stroke-linecap:round;stroke-linejoin:round}
+.btn:hover:not(:disabled){background:#3565D0;box-shadow:0 4px 16px rgba(70,121,225,.35);transform:translateY(-1px)}
+.btn:disabled{opacity:.55;cursor:not-allowed;transform:none}
+
+/* sidebar */
+.sidebar{display:flex;flex-direction:column;gap:1.1rem}
+.status-text{font-size:.875rem;color:var(--muted);margin-bottom:.7rem;min-height:2.4em}
+.progress{height:4px;background:var(--air);border-radius:100px;overflow:hidden}
+.progress span{display:block;height:100%;width:0%;border-radius:100px;
+  background:linear-gradient(90deg,var(--water),var(--land));transition:width .45s ease}
+
+.hidden{display:none!important}
+.result-card{border-color:#C6D3B4}
+.summary{display:grid;grid-template-columns:1fr 1fr;gap:.45rem .7rem;margin-bottom:.9rem}
+.summary div{display:contents}
+.summary dt{font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.summary dd{font-size:.83rem;font-weight:500;color:var(--text)}
+
+.dl-btn{display:flex;align-items:center;justify-content:center;gap:.5rem;
+  padding:.65rem 1.1rem;border-radius:var(--radius);background:var(--land);color:#fff;
+  font-size:.875rem;font-weight:700;text-decoration:none;cursor:pointer;border:none;width:100%;
+  box-shadow:0 2px 8px rgba(144,169,104,.28);transition:background .15s,box-shadow .15s,transform .1s}
+.dl-btn:hover{background:#7A9258;transform:translateY(-1px);box-shadow:0 4px 16px rgba(144,169,104,.35)}
+.dl-btn svg{width:15px;height:15px;stroke:currentColor;stroke-width:2.5;fill:none;
+  stroke-linecap:round;stroke-linejoin:round}
+
+.note-card ul{list-style:none;display:flex;flex-direction:column;gap:.28rem;margin-bottom:.65rem}
+.note-card li{font-size:.8rem;color:var(--text);padding-left:1rem;position:relative}
+.note-card li::before{content:'';position:absolute;left:0;top:.58em;width:5px;height:5px;
+  border-radius:50%;background:var(--land)}
+.note-card p{font-size:.78rem;color:var(--muted);line-height:1.55}
+.note-card p+p{margin-top:.45rem}
+
+.warn{background:#FFF8E1;border:1px solid #FFD54F;border-radius:var(--radius);
+  padding:.65rem .9rem;font-size:.8rem;color:#5D4037;margin-bottom:.7rem;line-height:1.5}
+
+.footer{background:#fff;border-top:1px solid var(--air);padding:.85rem 2rem;
+  display:flex;align-items:center;justify-content:space-between;
+  font-size:.75rem;color:var(--muted);flex-shrink:0}
+.footer a{color:var(--water);text-decoration:none}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <img src="{{LOGO}}" alt="UKCEH" style="height:28px;width:auto;display:block">
+    <div class="topbar-divider"></div>
+    <span class="topbar-title">FAIRe Metadata Filler</span>
+  </div>
+  <nav class="topbar-links">
+    <a href="https://fair-edna.github.io" target="_blank">FAIRe guidelines</a>
+    <a href="https://shiny.csiro.au/FAIRe-fier/" target="_blank">FAIRe-fier validator</a>
+    <a href="https://github.com/UKCEH-MolecularEcology/fair-edna-filler" target="_blank">GitHub</a>
+  </nav>
+</header>
+
+<main class="shell">
+  <div>
+    <div class="hero">
+      <h1>Fill a FAIRe metadata workbook from your report</h1>
+      <p>Runs in your browser — nothing is uploaded anywhere. The first visit downloads the Python engine (about 10 MB); after that the page works from your browser cache.</p>
+      <div class="badges">
+        <span class="badge">projectMetadata</span>
+        <span class="badge">sampleMetadata</span>
+        <span class="badge">experimentRunMetadata</span>
+        <span class="badge b">Claude AI parsing</span>
+        <span class="badge e">DOC · DOCX · PDF · TXT</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Upload files &amp; run</div>
+
+      <div class="warn">
+        📋 &nbsp;<strong>Need the FAIRe template?</strong>
+        Download the full template from
+        <a href="https://fair-edna.github.io/download.html" target="_blank">fair-edna.github.io/download.html</a>
+        then upload it below.
+      </div>
+
+      <!-- Report -->
+      <label class="drop" for="rpt">
+        <input id="rpt" type="file" accept=".doc,.docx,.txt,.pdf"/>
+        <div class="drop-inner">
+          <div class="drop-icon">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </div>
+          <div>
+            <div class="drop-lbl">Report</div>
+            <div class="drop-name" id="rptName">Choose a report file</div>
+            <div class="drop-hint">.doc · .docx · .pdf · .txt</div>
+          </div>
+        </div>
+      </label>
+
+      <!-- Template -->
+      <label class="drop" for="tpl">
+        <input id="tpl" type="file" accept=".xlsx"/>
+        <div class="drop-inner">
+          <div class="drop-icon">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </div>
+          <div>
+            <div class="drop-lbl">FAIRe template</div>
+            <div class="drop-name" id="tplName">Choose the FAIRe full template (.xlsx)</div>
+            <div class="drop-hint">Download from fair-edna.github.io/download.html</div>
+          </div>
+        </div>
+      </label>
+
+      <!-- API key -->
+      <div class="key-row">
+        <label for="apiKey">
+          Claude API key
+          <span class="opt-tag">optional — enables AI extraction</span>
+        </label>
+        <input id="apiKey" type="password" placeholder="sk-ant-…  (sent only to Anthropic, never stored)" autocomplete="off"/>
+      </div>
+
+      <button class="btn" id="runBtn">
+        <span>Fill metadata workbook</span>
+        <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="card">
+      <div class="card-label">Status</div>
+      <div class="status-text" id="statusText">Waiting for files.</div>
+      <div class="progress"><span id="bar"></span></div>
+    </div>
+
+    <div class="card result-card hidden" id="resultCard">
+      <div class="card-label">Workbook ready</div>
+      <dl class="summary">
+        <div><dt>Project</dt><dd id="rProject" style="grid-column:1/-1">—</dd></div>
+        <div><dt>Parsed with</dt><dd id="rMethod">—</dd></div>
+        <div><dt>Sites</dt><dd id="rLakes">—</dd></div>
+        <div><dt>Assays</dt><dd id="rAssays" style="grid-column:1/-1">—</dd></div>
+        <div><dt>Sample rows</dt><dd id="rSamples">—</dd></div>
+        <div><dt>Run rows</dt><dd id="rRuns">—</dd></div>
+      </dl>
+      <button class="dl-btn" id="dlBtn">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download filled workbook
+      </button>
+      <div id="notesBlock" class="hidden" style="margin-top:1rem">
+        <div class="card-label" style="margin-bottom:.4rem">Check these by hand</div>
+        <ul id="rNotes" style="font-size:.8rem;color:var(--muted);padding-left:1.1rem;display:flex;flex-direction:column;gap:.3rem"></ul>
+      </div>
+    </div>
+
+    <div class="card note-card">
+      <div class="card-label">What gets filled</div>
+      <ul>
+        <li><strong>projectMetadata</strong> — project info, PCR, sequencing, bioinformatics</li>
+        <li><strong>sampleMetadata</strong> — one row per sample &amp; field blank</li>
+        <li><strong>experimentRunMetadata</strong> — one row per sample × assay</li>
+      </ul>
+      <p>Anything the report doesn't state is entered as "missing: not provided" (FAIRe wording), so nothing is guessed.</p>
+      <p style="margin-top:.6rem"><strong>Without an API key</strong> the tool uses built-in pattern matching. <strong>With a Claude key</strong> it can also read unusual report layouts.</p>
+    </div>
+  </aside>
+</main>
+
+<footer class="footer">
+  <span>Built by <a href="https://www.ceh.ac.uk" target="_blank">UK Centre for Ecology &amp; Hydrology</a>
+  · <a href="https://fair-edna.github.io" target="_blank">FAIRe eDNA initiative</a></span>
+  <img src="{{LOGO}}" alt="UKCEH" style="height:18px;width:auto;opacity:.65">
+</footer>
+
+<!-- Python engine (Pyodide) + PDF text extraction (pdf.js). Loaded from CDN on first use. -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script type="text/plain" id="faire-py">{{FAIRE_PY}}</script>
+<script>
+'use strict';
+// The extraction and workbook-filling logic is server.py itself, running in the
+// browser through Pyodide, so this page always behaves exactly like the Python tool.
+const $ = id => document.getElementById(id);
+const setStatus = (msg, pct) => { $('statusText').textContent = msg; if (pct != null) $('bar').style.width = pct + '%'; };
+$('rpt').addEventListener('change', e => $('rptName').textContent = e.target.files[0]?.name ?? 'Choose a report file');
+$('tpl').addEventListener('change', e => $('tplName').textContent = e.target.files[0]?.name ?? 'Choose the FAIRe full template (.xlsx)');
+
+let pyReady = null;
+function loadEngine() {
+  if (!pyReady) pyReady = (async () => {
+    if (typeof loadPyodide === 'undefined') throw new Error('Could not load the Python engine – check your internet connection and reload the page.');
+    const py = await loadPyodide();
+    py.FS.mkdirTree('/faire');
+    py.FS.writeFile('/faire/faire.py', $('faire-py').textContent);
+    py.runPython("import sys; sys.path.insert(0, '/faire'); import faire, json");
+    return py;
+  })();
+  return pyReady;
+}
+loadEngine().then(() => { if ($('statusText').textContent.startsWith('Loading')) setStatus('Ready. Choose your report and the FAIRe template.', 0); })
+            .catch(e => setStatus(e.message, 0));
+setStatus('Loading the Python engine (about 10 MB, first visit only)…', 5);
+
+function readBytes(file) {          // FileReader works in every browser (File.arrayBuffer does not)
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(new Uint8Array(fr.result));
+    fr.onerror = () => reject(fr.error || new Error('Could not read ' + file.name));
+    fr.readAsArrayBuffer(file);
+  });
+}
+
+async function pdfText(buf) {
+  if (typeof pdfjsLib === 'undefined') throw new Error('PDF reader could not be loaded – check your internet connection.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let out = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const c = await (await pdf.getPage(i)).getTextContent();
+    for (const it of c.items) out += it.str + (it.hasEOL ? '\n' : '');
+    out += '\n';
+  }
+  return out;
+}
+
+async function claudeExtract(py, text, key) {
+  const prompt = py.globals.get('faire').claude_prompt(text);
+  const model = py.globals.get('faire').CLAUDE_MODEL;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01',
+               'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model, max_tokens: 8000, messages: [{ role: 'user', content: prompt }] }),
+  });
+  if (!res.ok) throw new Error(`Claude API error ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json();
+  return data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+}
+
+let outBytes = null, outName = 'FAIRe_filled.xlsx';
+$('runBtn').addEventListener('click', async () => {
+  const rpt = $('rpt').files[0], tpl = $('tpl').files[0];
+  if (!rpt || !tpl) { setStatus('Please choose both the report and the FAIRe template.', 0); return; }
+  $('runBtn').disabled = true; $('resultCard').classList.add('hidden'); outBytes = null;
+  try {
+    setStatus('Starting the Python engine…', 15);
+    const py = await loadEngine();
+    const ext = rpt.name.split('.').pop().toLowerCase();
+    const rptBuf = await readBytes(rpt);
+    let reportPath = '/faire/report.' + ext;
+    if (ext === 'pdf') {
+      setStatus('Reading the PDF…', 30);
+      py.FS.writeFile('/faire/report.txt', await pdfText(rptBuf)); reportPath = '/faire/report.txt';
+    } else py.FS.writeFile(reportPath, rptBuf);
+    py.FS.writeFile('/faire/template.xlsx', await readBytes(tpl));
+    setStatus('Extracting metadata from the report…', 45);
+    py.globals.set('report_path', reportPath);
+    py.globals.set('report_name', rpt.name);
+    py.runPython("text = faire.extract_report_text(report_path)");
+    const key = $('apiKey').value.trim();
+    let method = 'Rule-based (built-in patterns)';
+    py.runPython("meta = faire.parse_report_regex(text)");
+    if (key) {
+      try {
+        setStatus('Asking Claude to read the report…', 55);
+        py.globals.set('reply', await claudeExtract(py, py.globals.get('text'), key));
+        py.runPython("meta = faire.facts_from_claude(faire.json_from_reply(reply))");
+        method = 'Claude AI';
+      } catch (e) {
+        py.runPython("meta = faire.parse_report_regex(text)");
+        py.globals.set('err', String(e.message || e));
+        py.runPython("meta['notes'].append('Claude extraction failed (' + err[:120] + '); built-in patterns were used instead')");
+      }
+    }
+    setStatus('Writing the FAIRe workbook…', 80);
+    const summary = JSON.parse(py.runPython("json.dumps(faire.fill_workbook('/faire/template.xlsx', meta, report_name, '/faire/out.xlsx'))"));
+    outBytes = py.FS.readFile('/faire/out.xlsx');
+    outName = `FAIRe_filled_${summary.projectId || 'project'}.xlsx`;
+    $('rProject').textContent = summary.projectTitle || '—';
+    $('rMethod').textContent = method;
+    $('rLakes').textContent = summary.lakes;
+    $('rAssays').textContent = (summary.assays || []).join(', ');
+    $('rSamples').textContent = summary.sampleRows;
+    $('rRuns').textContent = summary.experimentRows;
+    const notes = $('rNotes'); notes.innerHTML = '';
+    for (const n of summary.notes || []) { const li = document.createElement('li'); li.textContent = n; notes.appendChild(li); }
+    $('notesBlock').classList.toggle('hidden', !(summary.notes || []).length);
+    setStatus('Done – review the summary, then download your workbook.', 100);
+    $('resultCard').classList.remove('hidden');
+  } catch (e) {
+    console.error(e);
+    setStatus('Error: ' + (e.message || e).toString().split('\n').filter(Boolean).pop(), 100);
+  } finally { $('runBtn').disabled = false; }
+});
+
+$('dlBtn').addEventListener('click', () => {
+  if (!outBytes) return;
+  const url = URL.createObjectURL(new Blob([outBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: outName });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+});
+</script>
+</body>
+</html>

@@ -12,11 +12,20 @@ Upload a Word document, PDF, or plain-text report and the tool extracts project 
 
 | Sheet | What gets populated |
 |---|---|
-| `projectMetadata` | Project name/ID, institution, funder, dates, PCR conditions, primer sequences, sequencing platform/kit, bioinformatics pipeline, reference databases |
-| `sampleMetadata` | One row per water sample and per field blank, with location, date, filtration, extraction, and assay details |
-| `experimentRunMetadata` | One row per sample × assay combination, with library and sequencing run identifiers |
+| `projectMetadata` | Project, institution, controls, PCR (per assay), library prep, sequencing, bioinformatics, reference databases |
+| `sampleMetadata` | One row per sample, plus field, extraction and PCR negative controls, with location, dates, filtration, storage and extraction details |
+| `experimentRunMetadata` | One row per sample × assay, with a `lib_id` that links back to `sampleMetadata` and a sequencing-run ID |
 
 The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `eLowQuantData` — those require your actual sequence data.
+
+### How values are placed
+
+- **Multi-assay projects** follow the layout of the official FAIRe examples: project-wide values go in `project_level` (column D), and anything that differs between assays (primers, PCR recipe, databases, sequencing kit…) goes in one column per assay (`assay1`, `assay2`, …).
+- **Controlled vocabularies** are read from the template's own `Drop-down values` sheet; values outside the list are written as `other: …`, as FAIRe requires.
+- **Nothing is guessed.** If the report doesn't state something (e.g. primer sequences in a table that is an image, exact coordinates), the cell gets the FAIRe wording `missing: not provided` (or `not applicable: control sample` for lab controls).
+- **IDs are generated** from the report structure (e.g. `BASS_R1_01`, `BASS_R1_FB`, `EXTBLANK_01`, `PCRNEG_16S_01`, `run_20260219_600cycle`). Replace them with your lab's IDs before publishing.
+- After filling, the page lists **"Check these by hand"** notes (for example inconsistencies spotted in the report).
+- The rest of the template — dropdowns, term notes, formatting, other sheets — is left exactly as it was.
 
 ---
 
@@ -26,13 +35,19 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 |---|---|
 | **Report file** | `.docx`, `.pdf`, `.doc`, or `.txt` |
 | **FAIRe template** | FAIRe full template `.xlsx` — [download here](https://fair-edna.github.io/download.html) |
-| **Claude API key** *(optional)* | Enables AI-powered extraction — [get a free key](https://console.anthropic.com) |
+| **Claude API key** *(optional)* | Lets Claude read unusual report layouts — [get a key](https://console.anthropic.com) (paid, usage-based) |
 
 **Output:** A filled `.xlsx` workbook ready to review in Excel and upload to the FAIRe-fier validator.
 
 ---
 
-## Option A — No installation: Google Colab
+## Option A — Just open a web page (no installation)
+
+Download the ZIP (green **Code** button → *Download ZIP*), extract it, and double-click **`index.html`**. It opens in your browser and does everything locally — your files are never uploaded. The first time, it downloads its Python engine (about 10 MB), so you need an internet connection once.
+
+---
+
+## Option A2 — Google Colab
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
 
@@ -86,6 +101,7 @@ python3 server.py                        # opens http://127.0.0.1:8787
 | Variable | Default | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | *(none)* | Claude API key for AI-powered extraction |
+| `FAIRE_CLAUDE_MODEL` | `claude-haiku-5-5` | Claude model used for extraction |
 | `FAIRE_TOOL_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for public) |
 | `FAIRE_TOOL_PORT` | `8787` | Port |
 
@@ -115,7 +131,7 @@ Set `ANTHROPIC_API_KEY`, `FAIRE_TOOL_HOST=0.0.0.0`, `FAIRE_TOOL_PORT=$PORT` in t
 | Mode | When | Quality |
 |---|---|---|
 | **Claude AI** | API key provided | Understands free-text, extracts any format |
-| **Rule-based** | No API key | Regex patterns optimised for Defra/UKCEH reports |
+| **Rule-based** | No API key | Generic patterns for typical eDNA methods text (works offline) |
 
 ---
 
@@ -123,10 +139,10 @@ Set `ANTHROPIC_API_KEY`, `FAIRE_TOOL_HOST=0.0.0.0`, `FAIRE_TOOL_PORT=$PORT` in t
 
 | Format | Support |
 |---|---|
+| `.doc` (Word 97–2003) | ✅ Always — read directly, no Word or LibreOffice needed |
 | `.docx` | ✅ Always |
 | `.txt` | ✅ Always |
-| `.pdf` | ✅ Requires `pdfplumber` (installed by launchers) |
-| `.doc` | ✅ Requires LibreOffice (`soffice`) or macOS `textutil` |
+| `.pdf` | ✅ Text-based PDFs (needs `pdfplumber` for the desktop/server versions; installed by the launchers). Scanned PDFs need OCR first. |
 
 ---
 
@@ -134,7 +150,10 @@ Set `ANTHROPIC_API_KEY`, `FAIRE_TOOL_HOST=0.0.0.0`, `FAIRE_TOOL_PORT=$PORT` in t
 
 ```
 fair-edna-filler/
-├── server.py                    # Web server, extraction logic, workbook filling
+├── server.py                    # All the logic: reading reports, extraction, filling, web server
+├── index.html                   # No-install version (runs server.py in the browser via Pyodide)
+├── build_standalone.py          # Rebuilds index.html from server.py — run after editing server.py
+├── standalone/shell.html        # Page layout used by build_standalone.py
 ├── tray_app.py                  # System-tray launcher (no terminal needed)
 ├── FAIRe_Metadata_Filler.ipynb  # Google Colab notebook
 ├── requirements.txt
@@ -154,15 +173,13 @@ fair-edna-filler/
 
 ## Citation
 
-If you use this tool, please also cite the FAIRe eDNA guidelines:
-
-> Turon X et al. (2025). FAIR eDNA (FAIRe) metadata checklist and guidelines. https://fair-edna.github.io
+If you use this tool, please also cite the FAIRe eDNA checklist and guidelines — see the project's [How to cite](https://fair-edna.github.io/citation.html) page.
 
 ---
 
 ## Contributing
 
-Issues and pull requests welcome. The Claude extraction prompt is in `server.py` (`_CLAUDE_EXTRACTION_PROMPT`).
+Issues and pull requests welcome. Everything lives in `server.py`: the rule-based extractor (`extract`), the workbook writer (`fill_workbook`) and the Claude prompt (`CLAUDE_PROMPT`). After changing it, run `python3 build_standalone.py` so `index.html` uses the same code.
 
 ## Licence
 

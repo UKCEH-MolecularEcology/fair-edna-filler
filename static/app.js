@@ -60,6 +60,12 @@ form.addEventListener('submit', async e => {
     set('rAssays',      Array.isArray(payload.assays) ? payload.assays.join(', ') : payload.assays);
     set('rSampleRows',  payload.sampleRows);
     set('rRunRows',     payload.experimentRows);
+    const notes = document.getElementById('rNotes');
+    if (notes) {
+      notes.innerHTML = '';
+      for (const n of payload.notes || []) { const li = document.createElement('li'); li.textContent = n; notes.appendChild(li); }
+      document.getElementById('notesBlock').classList.toggle('is-hidden', !(payload.notes || []).length);
+    }
 
     latestUrl  = payload.downloadUrl;
     latestName = payload.outputName || 'FAIRe_metadata_filled.xlsx';
