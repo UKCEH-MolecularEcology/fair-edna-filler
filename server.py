@@ -1123,10 +1123,13 @@ def extract(text: str) -> dict:
     for seg_mk, s, sent in pcr_segments:
         named = [seg_mk] if seg_mk else [m for m in markers_in(s) if m in assays]
         if re.search(r'\bqPCR\b|real[- ]time|\bprobe\b|\bC[tq]\b|ddPCR|\bdPCR\b|single[- ]species|TaqMan', s) and not named: carry = None; continue
+        if re.search(r'second[- ](?:step|round|stage)|step[- ](?:2|II)\b|index(?:ing)?\s+PCR|\bPCR\s*2\b|PCR2\b|second PCR|library PCR', s, re.I):
+            continue                                   # indexing PCR: not the assay's own amplification
         mks = named or carry or list(assays)
         carry = named or carry
         cyc = re.search(r'(\d{2})\s*cycles?\s*(?:of|consisting of|comprising|each of|:)?\s*[^.;]{0,30}?(\d{2,3}(?:\.\d)?)\s*°\s*C[^,;]{0,30}[,;]\s*(?:followed by\s*)?(?:and\s*)?(\d{2}(?:\.\d)?)\s*°\s*C', s)
-        ann = re.search(r'anneal\w*[^.;]{0,40}?(\d{2}(?:\.\d)?)\s*°\s*C|(\d{2}(?:\.\d)?)\s*°\s*C[^.;]{0,25}anneal', s, re.I)
+        ann = re.search(r'anneal\w*(?:[^.;°]{0,40}?)(\d{2}(?:\.\d)?)\s*°\s*C', s, re.I) or \
+              re.search(r'(\d{2}(?:\.\d)?)\s*°\s*C(?:(?!°)[^.;,]){0,25}\banneal', s, re.I)   # "annealing at 60 °C" before "60 °C (annealing)"
         cyc_only = re.search(r'(\d{2})\s*(?:PCR\s*)?cycles\b', s)
         pcr_ctx = re.search(r'PCR|reaction|amplif|[Mm]aster ?[Mm]ix|polymerase|primer', s)
         vol = pcr_ctx and (re.search(r'(?:total|final|reaction)\s+volumes?\s+(?:of\s+)?(\d+(?:\.\d+)?)\s*µ[lL]', s, re.I)
@@ -1142,7 +1145,7 @@ def extract(text: str) -> dict:
             if cyc:
                 put_a(mk, 'pcr_cycles', cyc.group(1), s, override=specific); put_a(mk, 'annealingTemp', cyc.group(3), s, override=specific)
             elif cyc_only: put_a(mk, 'pcr_cycles', cyc_only.group(1), s, override=specific)
-            if ann: put_a(mk, 'annealingTemp', ann.group(1) or ann.group(2), s, override=specific)
+            if ann: put_a(mk, 'annealingTemp', ann.group(1), s, override=specific or bool(cyc))
             if vol and float(vol.group(1)) <= 200: put_a(mk, 'amplificationReactionVolume', vol.group(1), s)
             if dna and pcr_ctx and 'elut' not in s.lower() and float(dna.group(1)) <= 20: put_a(mk, 'pcr_dna_vol', dna.group(1), s)
             if mm: put_a(mk, 'commercial_mm', norm(mm.group(1)), s)
@@ -2630,12 +2633,25 @@ def parse_report_regex(text: str) -> dict:
 
 _COLAB: dict = {}
 _CSS = """<style>
-.fx{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;color:#1d2b2a}
-.fx h3{margin:.2em 0 .4em;color:#1A3B8B}.fx .sum{background:#EBF5F3;border-radius:8px;padding:.6em .9em;margin:.4em 0}
-.fx .b{display:inline-block;border-radius:99px;padding:.05em .6em;font-weight:600;font-size:12px;margin-right:.3em}
-.fx .ok{background:#E2EAD9;color:#3A5020}.fx .ck{background:#FFF1C2;color:#7A5600}.fx .ms{background:#EEF1F1;color:#5F6B6A}
-.fx ul{margin:.3em 0 .3em 1.2em;padding:0}.fx .src{color:#5F6B6A;font-size:12px;font-style:italic}
-.fx .why{color:#7A5600;font-size:12px}.fx .term{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.fx,.fx-card,.fx-card *{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.fx{font-size:14px;color:inherit;line-height:1.5}
+.fx h3{margin:.6em 0 .3em;font-size:17px}
+.fx .sum{background:#F5F9F8;color:#1d2b2a;border:1px solid #D5EAE6;border-radius:10px;padding:.7em 1em;margin:.4em 0}
+.fx .sum small{color:#3d4b4a}
+.fx .b{display:inline-block;border-radius:99px;padding:.1em .7em;font-weight:600;font-size:13px;margin:0 .3em .3em 0}
+.fx .ok{background:#DCE8CF;color:#2F4519}.fx .ck{background:#FFE9A8;color:#5C4100}.fx .ms{background:#E4E9E9;color:#3d4b4a}
+.fx-card{background:#ffffff !important;color:#1d2b2a !important;border:1px solid #D5EAE6;border-left:5px solid #4679E1;
+         border-radius:10px;padding:10px 14px !important;margin:8px 2px !important}
+.fx-card.check{border-left-color:#E0A800}.fx-card.missing{border-left-color:#9AA5A4}.fx-card.okc{border-left-color:#90A968}
+.fx-card .term{font-weight:700;font-size:15px;color:#1A3B8B}
+.fx-card .tag{display:inline-block;margin-left:6px;background:#D1DEF8;color:#1A3B8B;border-radius:99px;padding:0 8px;font-size:12px;font-weight:600}
+.fx-card .why{color:#7A4E00;font-size:13px;margin-top:4px}
+.fx-card .why.good{color:#3A5020}
+.fx-card .src{color:#3d4b4a;font-size:13px;margin-top:4px;background:#F5F9F8;border-radius:6px;padding:6px 8px}
+.fx-card .src b{color:#1d2b2a}
+.fx-card textarea{background:#ffffff !important;color:#111111 !important;border:1.5px solid #9DB8B3 !important;border-radius:6px !important;
+                  font-size:14px !important;padding:6px 8px !important}
+.fx-card textarea:focus{border-color:#4679E1 !important}
 </style>"""
 
 
@@ -2648,7 +2664,7 @@ def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_con
     from google.colab import files as colab_files
     from IPython.display import display, HTML
     import urllib.request
-    display(HTML(_CSS + '<div class="fx"><h3>1 · Upload your report</h3>(.doc, .docx, .pdf or .txt)</div>'))
+    display(HTML(_CSS + '<div class="fx"><h3>① Upload your report</h3>.doc, .docx, .pdf or .txt – it stays in this Colab session</div>'))
     up = colab_files.upload()
     if not up: return display(HTML('<div class="fx">No file chosen – run this cell again.</div>'))
     report = Path(list(up)[0])
@@ -2688,7 +2704,7 @@ def _review_screen(items, meta):
     from IPython.display import display, HTML
     c = review_summary(items)
     notes = ''.join(f'<li>{_esc(n)}</li>' for n in meta.get('notes') or [])
-    display(HTML(_CSS + f'''<div class="fx"><h3>2 · Check the values</h3><div class="sum">
+    display(HTML(_CSS + f'''<div class="fx"><h3>② Check the values</h3><div class="sum">
       <span class="b ok">{c["ok"]} accepted automatically</span><span class="b ck">{c["check"]} need a look</span>
       <span class="b ms">{c["missing"]} not found in the report</span><br>
       <small>Read with: {_esc(meta.get("_method"))}. Change anything that is wrong – your changes are used when you click
@@ -2700,14 +2716,17 @@ def _review_screen(items, meta):
         out = []
         for it in sel:
             val = '' if it['value'].startswith(('missing:', 'not applicable')) else it['value']
-            box = w.Textarea(value=val, layout=w.Layout(width='98%', height='34px' if len(val) < 90 else '64px'))
+            box = w.Textarea(value=val, placeholder='type a value if you know it', layout=w.Layout(width='100%', height='38px' if len(val) < 90 else '70px'))
             boxes[it['id']] = (box, val)
-            label = f'<span class="term">{_esc(it["term"])}</span>' + (f' <span class="b ms">{_esc(it.get("assay"))}</span>' if it.get('assay') else '') + \
-                    (' <span class="b ms">all samples</span>' if it['scope'] == 'samples' else '')
-            info = (f'<div class="why">{_esc(" · ".join(it.get("reasons") or []))}</div>' if it['status'] == 'check' else '') + \
-                   (f'<div class="src">“{_esc(it["evidence"][:300])}”</div>' if it.get('evidence') else '')
-            out.append(w.VBox([w.HTML(f'<div class="fx">{label}</div>'), box, w.HTML(f'<div class="fx">{info}</div>')],
-                              layout=w.Layout(border_bottom='1px solid #EEF3F2', padding='4px 0')))
+            tags = (f'<span class="tag">{_esc(it.get("assay"))}</span>' if it.get('assay') else '') + \
+                   ('<span class="tag">all samples</span>' if it['scope'] == 'samples' else '') + \
+                   ('<span class="tag">required</span>' if it.get('required') in ('M', 'HR') else '')
+            reasons = ' · '.join(it.get('reasons') or [])
+            why = f'<div class="why{"" if it["status"] == "check" else " good"}">{"⚠ " if it["status"] == "check" else ""}{_esc(reasons)}</div>' if reasons else ''
+            src = f'<div class="src"><b>From the report:</b> “{_esc(it["evidence"][:400])}”</div>' if it.get('evidence') else ''
+            card = w.VBox([w.HTML(f'<div><span class="term">{_esc(it["term"])}</span>{tags}</div>'), box, w.HTML(why + src)])
+            card.add_class('fx-card'); card.add_class({'check': 'check', 'missing': 'missing'}.get(it['status'], 'okc'))
+            out.append(card)
         return w.VBox(out or [w.HTML('<div class="fx">Nothing here.</div>')])
 
     shown = [it for it in items if not (it['generated'] and it['status'] == 'ok')]
@@ -2731,7 +2750,7 @@ def _review_screen(items, meta):
         btn.disabled = False
 
     btn.on_click(go)
-    display(tabs, HTML(_CSS + '<div class="fx"><h3>3 · Fill the workbook</h3></div>'), w.HBox([save, name]), btn, out)
+    display(tabs, HTML(_CSS + '<div class="fx"><h3>③ Fill the workbook</h3></div>'), w.HBox([save, name]), btn, out)
 
 
 def colab_fill(edits=None, save_profile=False, profile_name='my FAIRe profile'):
