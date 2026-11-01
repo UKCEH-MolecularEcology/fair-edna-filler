@@ -33,6 +33,12 @@ STATIC_DIR = APP_DIR / 'static'
 OUTPUT_DIR = APP_DIR / 'outputs'
 UPLOAD_DIR = APP_DIR / 'uploads'     # reserved for batch processing (multiple reports / a folder)
 
+# FAIRe FULL template this tool is tested against. Updated by .github/workflows/check-template.yml
+TEMPLATE_VERSION = '1.0.2'
+TEMPLATE_FILE = f'FAIRe_checklist_v{TEMPLATE_VERSION}_FULLtemplate.xlsx'
+TEMPLATE_URL = f'https://github.com/FAIR-eDNA/FAIRe_checklist/raw/main/{TEMPLATE_FILE}'   # official source
+TEMPLATE_PATH = APP_DIR / 'template' / TEMPLATE_FILE                                          # bundled copy
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  1. Reading reports
@@ -539,9 +545,10 @@ def extract(text: str) -> dict:
         if mk in assays:
             a = assays[mk]
             a['primer_name_fwd'], a['primer_name_rev'] = pm.group(1), pm.group(2)
-            ref = re.search(r'primers? of ([A-Z][\w\-]+ et al\.? \(?\d{4}\)?)', main)
+            ref = re.search(r'primers?(?:\s+[\w\-]+\s*(?:and|/)\s*[\w\-]+)?\s+of ([A-Z][\w\-]+ et al\.?,? \(?\d{4}\)?)', main) or \
+                  re.search(r'([\w\-]+)\s*/\s*([\w\-]+)\s+primers? of ([A-Z][\w\-]+ et al\.?,? \(?\d{4}\)?)', main)
             if ref:
-                full = ref_for(ref.group(1).replace('(', '').replace(')', ''), refs)
+                full = ref_for(ref.group(ref.lastindex).replace('(', '').replace(')', '').replace(',', ''), refs)
                 a['primer_ref_fwd'] = a['primer_ref_rev'] = full
     for mk, a in assays.items():
         fwd, rev = a.get('primer_name_fwd'), a.get('primer_name_rev')
@@ -1351,21 +1358,22 @@ def safe_name(name):
 
 
 def parse_multipart(content_type, body):
+    """Minimal multipart/form-data parser that keeps file bytes exactly as sent."""
     m = re.search(r'boundary=(?P<b>[^;]+)', content_type)
     if not m: raise ValueError('Missing multipart boundary.')
-    boundary = m.group('b').strip().strip('"').encode()
+    delim = b'--' + m.group('b').strip().strip('"').encode()
     parts = {}
-    for raw in body.split(b'--' + boundary):
-        raw = raw.strip(b'\r\n')
-        if not raw or raw == b'--': continue
-        if raw.endswith(b'--'): raw = raw[:-2].rstrip(b'\r\n')
-        head_blob, _, payload = raw.partition(b'\r\n\r\n')
+    for raw in body.split(delim)[1:]:
+        if raw.startswith(b'--'): break                       # closing delimiter
+        if raw.startswith(b'\r\n'): raw = raw[2:]
+        if raw.endswith(b'\r\n'): raw = raw[:-2]             # the CRLF that precedes the next delimiter
+        head_blob, sep, payload = raw.partition(b'\r\n\r\n')
+        if not sep: continue
         headers = head_blob.decode('utf-8', errors='replace')
         disp = re.search(r'Content-Disposition: form-data;\s*(.*)', headers, re.I)
-        if not disp: continue
-        nm = re.search(r'name="([^"]+)"', disp.group(1))
-        fn = re.search(r'filename="([^"]*)"', disp.group(1))
+        nm = re.search(r'name="([^"]+)"', disp.group(1)) if disp else None
         if not nm: continue
+        fn = re.search(r'filename="([^"]*)"', disp.group(1))
         parts[nm.group(1)] = (fn.group(1) if fn else nm.group(1), payload)
     return parts
 
@@ -1413,6 +1421,11 @@ class Handler(BaseHTTPRequestHandler):
             if STATIC_DIR.resolve() not in tgt.parents: return self.send_error(404)
             ct = {'.css': 'text/css', '.js': 'application/javascript', '.png': 'image/png', '.svg': 'image/svg+xml'}.get(tgt.suffix, 'text/html; charset=utf-8')
             self._serve(tgt, ct)
+        elif path == '/template':
+            if TEMPLATE_PATH.is_file():
+                self._serve(TEMPLATE_PATH, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', attachment=True)
+            else:
+                self.send_response(302); self.send_header('Location', TEMPLATE_URL); self.end_headers()
         elif path.startswith('/download/'):
             self._serve(OUTPUT_DIR / safe_name(path[len('/download/'):]),
                         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', attachment=True)
@@ -1426,11 +1439,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get('Content-Length', '0'))
             form = parse_multipart(self.headers.get('Content-Type', ''), self.rfile.read(length))
-            if 'report' not in form or 'template' not in form:
-                raise ValueError('Please upload both a report file and the FAIRe template workbook.')
+            if 'report' not in form or not form['report'][1]:
+                raise ValueError('Please choose a report file.')
+            template_bytes = form.get('template', ('', b''))[1]
+            if not template_bytes:                      # no template chosen: use the bundled official copy
+                if not TEMPLATE_PATH.is_file():
+                    raise ValueError('Please choose the FAIRe template workbook.')
+                template_bytes = TEMPLATE_PATH.read_bytes()
             key_field = form.get('apiKey', ('', b''))[1].decode('utf-8', errors='replace').strip()
             api_key = key_field or os.environ.get('ANTHROPIC_API_KEY', '')
-            self._json(process_upload(form['report'][0], form['report'][1], form['template'][1], api_key))
+            self._json(process_upload(form['report'][0], form['report'][1], template_bytes, api_key))
         except Exception as exc:
             self._json({'error': str(exc)}, 500)
 

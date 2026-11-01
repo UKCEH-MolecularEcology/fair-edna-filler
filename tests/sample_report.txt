@@ -1,0 +1,52 @@
+Evidence Project Final Report
+
+Project identification
+
+1.	Project code	TEST-001
+2.	Project title
+Example eDNA survey of two upland lakes for automated testing
+
+3.	Contractor
+organisation(s)
+UKCEH
+
+5.	Project:	start date		1st April 2024
+		end date		31st March 2025
+
+Executive Summary
+This is a fictional report used only to test the FAIRe Metadata Filler. Water samples were collected from two Welsh lakes and analysed with 12S and COI metabarcoding.
+
+Methods
+
+Sampling sites and sample collection
+
+Five 1L water samples, consisting of 2 x 500 ml subsamples, were collected from the shoreline of each lake in the weeks commencing 3rd June and 2nd September 2024. One field blank of purified water was collected per lake in each sampling campaign. Samples were transported on ice to UKCEH Bangor and vacuum filtered within 24 hours using 47 mm diameter 0.45 µM cellulose nitrate filters. The average volume filtered was 800 ml (range 400 to 1000 ml). Filters were placed in tubes containing 1 ml DNA/RNA Shield (Zymo Research). Samples were stored at -20°C prior to DNA extraction and sequencing at UKCEH Wallingford.
+
+Table 1: Lakes sampled.
+Lake
+Code	Type	Status	Depth	Trophic status	Llyn Alpha
+LALP	LAD	Good	Deep	Oligotrophic	Llyn Beta
+LBET	MAS	Moderate	Shallow	Eutrophic
+
+DNA extraction
+
+DNA extraction was performed using DNeasy PowerWater Kit (Qiagen, 14900-100-NF) with the following amendments made to account for sample type. Two extraction blanks were included. Two rounds of mechanical lysis were performed on a bead beater for 30 seconds. DNA quantity was checked using a Qubit v3 fluorometer.
+
+Primer selection, PCR and sequencing
+
+For fish, we used the 12S primers Tele02F and Tele02R of Taberlet et al. 2018. For invertebrates, we selected the fwhF2/fwhR2n primers of Vamos et al. 2017. Library preparation followed a two-step amplification approach (forward adaptor: 5'-TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG-3', reverse adaptor: 5'-GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG-3'). PCRs were performed in single reactions. PCRs were prepared in a UV-sterilised laminar flow hood. For 12S and COI assays, individual PCR reactions contained 12.5 µL of Q5 High-Fidelity Master Mix (New England Biolabs), 0.5 µL of each 10 µM forward and reverse primer and 9.5 µL of molecular grade water. The solution was mixed prior to the addition of 2 µL of template DNA. Two PCR blanks were included for each primer pair. Libraries were sequenced at a concentration of 1.2 nM with a 10% addition of Illumina generated PhiX control library on an Illumina MiSeq platform using MiSeq v3 Chemistry 600 Cycles for 12S and COI.
+
+Bioinformatic analysis
+
+Primer sequences were removed using cutadapt (v4.9). Sequences were processed using the DADA2 pipeline in R v4.4.1 to quality filter, merge, denoise and assign taxonomies. Filtering settings were maximum number of Ns (maxN) = 0 and maximum number of expected errors (maxEE) = 2,2). mergePairs was used to merge sequences. Chimeric sequences were removed using removeBimeraDenovo default settings. ASVs were subject to taxonomic assignment using assignTaxonomy at default settings. For 12S, sequences were classified against Midori2. For COI, sequences were classified against the BOLD database.
+
+Statistical analysis
+
+ASV tables were normalised via rarefaction to 5,000 sequences for 12S and 2000 for COI using rarefy_even_depth() in phyloseq. Fish communities detected with the 12S marker and metazoan communities detected with COI were compared. 12S fish and COI metazoans differed between lakes.
+
+Results
+Sequence runs were completed successfully on 10/1/25. Field blanks and extraction blanks showed minor contamination which was not reliable for interpretation.
+
+References to published material
+Taberlet, P., Bonin, A., Zinger, L. & Coissac, E. (2018). Environmental DNA: For Biodiversity Research and Monitoring. Oxford University Press.
+Vamos, E. E., Elbrecht, V., & Leese, F. (2017). Short COI markers for freshwater macroinvertebrate metabarcoding. Metabarcoding and Metagenomics, 1, e14625. https://doi.org/10.3897/mbmg.1.14625

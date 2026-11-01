@@ -7,11 +7,13 @@ uploads/*
 outputs/
 *.log
 *.xlsx
+!template/*.xlsx
 *.doc
 *.docx
 *.pdf
 *.txt
 !requirements.txt
+!tests/*.txt
 .env
 .DS_Store
 Thumbs.db

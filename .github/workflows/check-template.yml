@@ -1,0 +1,86 @@
+name: Check for a new FAIRe template
+
+# Twice a year, look at the FAIRe download page. If it links to a different FULL
+# template version, download it, test the tool against it and open a pull request.
+# Nothing is merged automatically – a maintainer reviews the PR.
+on:
+  schedule:
+    - cron: '23 5 1 1,7 *'   # 05:23 UTC on 1 January and 1 July
+  workflow_dispatch:         # "Run workflow" button in the Actions tab
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compare with the FAIRe download page
+        id: check
+        run: python3 scripts/check_template_update.py
+
+      - name: Test the tool with the new template
+        id: tests
+        if: steps.check.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python3 tests/test_tool.py 2>&1 | tee "$RUNNER_TEMP/test-results.txt"
+
+      - name: Write the pull-request description
+        if: steps.check.outputs.changed == 'true'
+        env:
+          OLD: ${{ steps.check.outputs.old }}
+          NEW: ${{ steps.check.outputs.new }}
+          DIRECTION: ${{ steps.check.outputs.direction }}
+          URL: ${{ steps.check.outputs.url }}
+          OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          {
+            echo "The [FAIRe download page](https://fair-edna.github.io/download.html) now links to the FULL template **v$NEW**. This tool currently uses **v$OLD** (the listed version is $DIRECTION)."
+            echo
+            echo "This PR replaces \`template/\` with the [new file]($URL), sets \`TEMPLATE_VERSION\` in \`server.py\`, updates the README links and rebuilds \`index.html\`."
+            echo
+            if [ "$OUTCOME" = "success" ]; then
+              echo "✅ **All tool checks pass with the new template.**"
+            else
+              echo "❌ **Some checks fail with the new template** – usually a renamed or removed term. Update \`server.py\` on this branch (then run \`python3 build_standalone.py\`) before merging."
+            fi
+            echo
+            echo "Before merging, skim the [FAIRe changelog](https://github.com/FAIR-eDNA/FAIRe_checklist/blob/main/CHANGELOG.md) for new or changed terms the tool could fill."
+            echo
+            echo "<details><summary>Test output</summary>"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/test-results.txt"
+            echo '```'
+            echo "</details>"
+          } > "$RUNNER_TEMP/pr-body.md"
+
+      - name: Open a pull request
+        if: steps.check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: template-update/v${{ steps.check.outputs.new }}
+          commit-message: Use FAIRe FULL template v${{ steps.check.outputs.new }}
+          title: FAIRe template v${{ steps.check.outputs.new }} available${{ steps.tests.outcome != 'success' && ' – checks failing' || '' }}
+          body-path: ${{ runner.temp }}/pr-body.md
+          add-paths: |
+            template/
+            server.py
+            README.md
+            index.html
+          delete-branch: true
+
+      - name: Flag failing checks
+        if: steps.check.outputs.changed == 'true' && steps.tests.outcome != 'success'
+        run: |
+          echo "::error::The tool's checks fail with the new template – see the pull request."
+          exit 1

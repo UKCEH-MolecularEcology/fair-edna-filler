@@ -24,7 +24,7 @@ let latestUrl  = '';
 let latestName = 'FAIRe_metadata_filled.xlsx';
 
 reportInput.addEventListener('change',   () => { reportName.textContent   = reportInput.files?.[0]?.name   ?? 'Choose a report file'; });
-templateInput.addEventListener('change', () => { templateName.textContent = templateInput.files?.[0]?.name ?? 'Choose the FAIRe full template (.xlsx)'; });
+templateInput.addEventListener('change', () => { templateName.textContent = templateInput.files?.[0]?.name ?? 'Built-in FULL template'; });
 
 function setStatus(msg, pct) {
   statusText.textContent    = msg;

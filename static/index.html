@@ -79,19 +79,20 @@
 
           <!-- Template -->
           <p style="font-size:.8rem;color:var(--text-muted);margin:.2rem 0 .45rem">
-            Need the template? <a href="https://github.com/FAIR-eDNA/FAIRe_checklist/raw/main/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx" download style="color:var(--water);font-weight:700" target="_blank" rel="noopener">Download the FAIRe FULL template (v1.0.2, .xlsx)</a>
+            The official FAIRe FULL template is built in – only choose one to use a different template.
+            <a href="/template" style="color:var(--water);font-weight:700" target="_blank" rel="noopener">Download the built-in template</a>
             · <a href="https://fair-edna.github.io/download.html" target="_blank" rel="noopener" style="color:var(--water)">FAIRe download page</a>
           </p>
           <label class="drop-zone" for="template">
-            <input id="template" name="template" type="file" accept=".xlsx" required />
+            <input id="template" name="template" type="file" accept=".xlsx" />
             <div class="drop-inner">
               <div class="drop-icon">
                 <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
               </div>
               <div>
-                <div class="drop-label">FAIRe template</div>
-                <div class="drop-filename" id="templateName">Choose the FAIRe full template (.xlsx)</div>
-                <div class="drop-hint">The FULL template – download link above</div>
+                <div class="drop-label">FAIRe template (optional)</div>
+                <div class="drop-filename" id="templateName">Built-in FULL template</div>
+                <div class="drop-hint">Leave empty to use the built-in template</div>
               </div>
             </div>
           </label>
