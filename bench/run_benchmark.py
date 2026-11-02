@@ -42,16 +42,23 @@ def same(answer, ours):
     return len(short) >= 4 and short in long_
 
 
-def read_filled(path):
-    """projectMetadata {term: [values]} and the first 'sample' row of sampleMetadata {term: value}."""
+def read_filled(path, kind=None):
+    """projectMetadata {term: [values]} and the first 'sample' row of sampleMetadata {term: value}.
+    kind: in a workbook with targeted and metabarcoding assays, only that kind's assay columns are read."""
     with zipfile.ZipFile(path) as z:
         pkg = {n: z.read(n) for n in z.namelist()}
     ss = server.shared_strings(pkg); paths = server.sheet_paths(pkg)
     proj = {}
-    for n, r in server.parse_rows(pkg[paths['projectMetadata']].decode()).items():
+    prow = server.parse_rows(pkg[paths['projectMetadata']].decode())
+    kinds = {}
+    for n, r in prow.items():
+        v = {c: server.cell_text(x, ss) for c, x in r['cells'].items()}
+        if v.get('C') == 'assay_type': kinds = {c: x for c, x in v.items() if server.col_num(c) >= 5 and x}
+    keep = (lambda c: server.col_num(c) == 4 or kinds.get(c) == kind) if kind and len(set(kinds.values())) > 1 else (lambda c: server.col_num(c) >= 4)
+    for n, r in prow.items():
         if n < 2: continue
         v = {c: server.cell_text(x, ss) for c, x in r['cells'].items()}
-        vals = [x for c, x in sorted(v.items(), key=lambda kv: server.col_num(kv[0])) if server.col_num(c) >= 4 and x and not MISSING.match(x)]
+        vals = [x for c, x in sorted(v.items(), key=lambda kv: server.col_num(kv[0])) if server.col_num(c) >= 4 and keep(c) and x and not MISSING.match(x)]
         if v.get('C'): proj[v['C']] = vals
     rows = server.parse_rows(pkg[paths['sampleMetadata']].decode())
     hdr = {c: server.cell_text(x, ss) for c, x in rows[3]['cells'].items()}
@@ -64,11 +71,16 @@ def read_filled(path):
     return proj, first
 
 
-def detect_key(text):
-    """The answer key whose source document this is (matched on its title near the start of the text).
-    Metabarcoding keys win when one document is the source of both kinds (e.g. NECR534)."""
+def detect_keys(text):
+    """The answer keys whose source document this is (matched on its title near the start of the text).
+    A document can be the source of a metabarcoding and a targeted example (e.g. NECR534): both are scored."""
     hits = [n for n, k in keys.items() if re.search(k['match'], text[:k.get('search_chars', 6000)])]
     hits.sort(key=lambda n: keys[n]['kind'] != 'metabarcoding')
+    return hits
+
+
+def detect_key(text):
+    hits = detect_keys(text)
     return hits[0] if hits else None
 
 
@@ -96,7 +108,7 @@ for f in files:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / 'out.xlsx'
         server.fill_workbook(server.TEMPLATE_PATH, meta, f.name, out)
-        proj, samp = read_filled(out)
+        by_kind = {kd: read_filled(out, kd) for kd in ('metabarcoding', 'targeted')}
     items = server.review(meta)
     status = {}
     for i in items:
@@ -104,14 +116,17 @@ for f in files:
     filled = [i for i in items if i['value'] and not MISSING.match(i['value']) and not i['generated']]
     for i in filled:
         value_rows.append([f.name, i['id'], i['value'][:200], (i['evidence'] or '')[:300]])
-    key_name = detect_key(text)
+    key_names = detect_keys(text)
+    key_name = ', '.join(key_names) or None
     rs = server.review_summary(items)
     row = {'file': f.name, 'auto': rs['ok'], 'check': rs['check'], 'chars': len(text), 'language': lang[1], 'assays': len(meta['assays']),
            'sites': len(meta['sites']), 'filled': len(filled), 'sourced': sum(1 for i in filled if i['evidence']), 'key': key_name or '—'}
     lines += [f'## {f.name}', f'{len(text):,} characters · language: {lang[1]} · assays: {", ".join(a["assay_name"] for a in meta["assays"]) or "none"} · '
               f'sites: {len(meta["sites"])} · rounds: {len(meta["rounds"])} · fields filled: {len(filled)} ({row["sourced"]} with a source sentence)', '']
-    if key_name:
+    row.update(right=0, wrong=0, missed=0) if key_names else None
+    for key_name in key_names:
         k = keys[key_name]; res = {'right': [], 'wrong': [], 'missed': []}
+        proj, samp = by_kind[k['kind']]
         for term, answers in k['project'].items():
             ours = proj.get(term, [])
             for ans in answers:
@@ -130,7 +145,7 @@ for f in files:
             else: res['missed'].append(f'{term} ("{ans[:40]}")')
         n = sum(len(v) for v in res.values())
         for x in res: totals[x] += len(res[x])
-        row.update(right=len(res['right']), wrong=len(res['wrong']), missed=len(res['missed']))
+        row.update(right=row['right'] + len(res['right']), wrong=row['wrong'] + len(res['wrong']), missed=row['missed'] + len(res['missed']))
         lines += [f'Answer key: **{key_name}** ({k["kind"]}) — right {len(res["right"])}/{n}, wrong {len(res["wrong"])}, missed {len(res["missed"])}', '']
         if res['wrong']: lines += ['Wrong:'] + [f'- {x}' for x in res['wrong']] + ['']
         if res['missed']: lines += ['Missed:'] + [f'- {x}' for x in res['missed']] + ['']

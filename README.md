@@ -18,12 +18,15 @@ Upload a Word document, PDF, or plain-text report and the tool extracts project 
 | `sampleMetadata` | One row per sample, plus field, extraction and PCR negative controls, with location, dates, filtration, storage and extraction details |
 | `experimentRunMetadata` | One row per sample × assay, with a `lib_id` that links back to `sampleMetadata` and a sequencing-run ID |
 
-The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `eLowQuantData` — those require your actual sequence data.
+`taxaRaw` and `taxaFinal` are filled when you add a read table or detection table (see [More sources](#more-sources-than-the-report)). The tool does not fill `ampData`, `stdData` or `eLowQuantData`: those need your qPCR/dPCR run data.
 
 ### How values are placed
 
 - **Multi-assay projects** follow the layout of the official FAIRe examples: project-wide values go in `project_level` (column D), and anything that differs between assays (primers, PCR recipe, databases, sequencing kit…) goes in one column per assay (`assay1`, `assay2`, …).
 - **Controlled vocabularies** are read from the template's own `Drop-down values` sheet; values outside the list are written as `other: …`, as FAIRe requires.
+- **Tables are read, not only sentences.** Primer and probe tables (one oligo per row, or one assay per column), labelled blocks such as `Forward Primer: …`, recipe lists (`a. 3 µL template DNA, b. 1 µL of each primer/probe …`) and lab protocols in appendices after the reference list are all read. Tables that repeat the same primer sites for many species (specificity or alignment tables) are recognised and not mistaken for extra assays.
+- **Targeted (qPCR/dPCR) and metabarcoding assays.** Each assay gets its own type. For qPCR/dPCR assays the tool fills the probe (sequence, reporter, quencher, concentration), reaction recipe, cycling, replicates, instrument, LOD/LOQ and standard type when stated, and marks sequencing terms *not applicable*. A report with both kinds gets both, with `assay_type` written per assay column; only sequenced assays get `experimentRunMetadata` rows. Genes such as ND1–ND6, D-loop (control region), COII and COIII are recognised, also from full names like "cytochrome b".
+- **Several primer pairs for one marker** (e.g. Vert01 and Tele01 for 12S) become separate assays.
 - **Nothing is guessed.** If the report doesn't state something (e.g. primer sequences in a table that is an image, exact coordinates), the cell gets the FAIRe wording `missing: not provided` (or `not applicable: control sample` for lab controls).
 - **Sample rows.** A report rarely lists every sample, so by default the rows are estimated from how sampling is described. For example, "Troutbeck Fan (TFAN, N=4) … each site was sampled five times" gives TFAN001_V1 … TFAN004_V5, plus field, extraction and PCR blanks. For the real list, with dates, coordinates, volumes and run IDs per sample, add an optional **sample list** (`.csv`/`.xlsx`, one row per sample — see [`template/sample_list_template.csv`](template/sample_list_template.csv)). Column names can be plain ("sample", "date", "site", "latitude", "volume filtered (ml)") or any FAIRe sampleMetadata / experimentRunMetadata term. Blanks are recognised from their names or type.
 - **IDs are generated** from the report structure (e.g. `BASS_R1_01`, `BASS_R1_FB`, `EXTBLANK_01`, `PCRNEG_16S_01`, `run_20260219_600cycle`). Replace them with your lab's IDs before publishing.
@@ -227,17 +230,23 @@ The tool decides for each value whether it can be **accepted automatically** or 
 
 **Other languages.** The built-in reader is written for English. Reports in other languages are detected and flagged; primer sequences, numbers, kit and tool names are still found, but expect more gaps to fill by hand.
 
-**Targeted (qPCR / ddPCR) studies.** The tool is built for metabarcoding. If a report looks like a targeted study, `assay_type` is set to `targeted` and you are told which fields (probe, standard curve, LOD/LOQ) to fill by hand.
+**Targeted (qPCR / ddPCR / dPCR) studies.** Supported since v1.1 (see *How values are placed*). Values that are only in supplementary files or in tables saved as images still need to be added by hand; the notes list what to check.
 
 ### How well does it work?
 
-`bench/run_benchmark.py` runs the tool on a folder of reports and compares the result with the published FAIRe example workbooks for the same studies. On 14 public reports and papers, three of which have a published workbook, 120 values could be checked:
+`bench/run_benchmark.py` runs the tool on a folder of reports and compares the result with the published FAIRe example workbooks for the same studies (every published example whose source document is public: seven answer keys for six documents, three of them targeted assays). 197 values could be checked:
 
-- 61 were right and 13 differed from the published workbook. Most of the 13 are naming or rounding differences, e.g. "Qiagen DNeasy Blood & Tissue kit" vs "Qiagen Blood & Tissue Kit", or 12.5 vs 13 µL. About four are real errors, such as a storage temperature.
-- 46 were not found: things a report doesn't state in words, or values in tables that are images.
-- Of the values **accepted automatically**, 42 were right and 11 differed (the naming differences above, plus about three real errors). 21 values were **flagged for a look**; 19 of those were right.
+| | v1.0 | v1.1 |
+|---|---|---|
+| Right | 85 (43%) | 119 (60%) |
+| Different from the published workbook | 26 | 24 |
+| Not found | 86 | 54 |
+| Accepted automatically: right / different | 62 / 18 | 81 / 20 |
+| Flagged for a look: right / different | 23 / 8 | 38 / 4 |
 
-So expect to look at roughly 10–20 flagged values per report, plus the mandatory fields the report doesn't state.
+v1.1 added reading of primer/probe tables, recipe lists, appendices and targeted assays; the gain comes almost entirely from the three targeted examples (13 → 41 right). Many remaining differences are naming (e.g. "Qiagen DNeasy Blood & Tissue kit" vs "Qiagen Blood & Tissue Kit"); some are values where the published workbook and the paper disagree. Values not found are mostly things a report doesn't state in words, or values in tables that are images.
+
+So expect to look at roughly 5–20 flagged values per report, plus the mandatory fields the report doesn't state.
 
 ```bash
 python3 bench/run_benchmark.py path/to/reports/   # writes bench/results.md and bench/values.csv
@@ -308,6 +317,11 @@ What keeps them in step:
 - **Automatic rebuild.** When `server.py` or the page layout (`standalone/shell.html`) changes on `main`, the *Keep the browser version in step* workflow rebuilds `index.html`, tests it and commits it. GitHub Pages then republishes the online tool. Locally you can run `python3 build_standalone.py` yourself.
 - **Matching options.** `tests/test_tool.py` checks that the browser page, Colab and the command line all pass every option of `prepare()` (profile, sample list, extra sources, follow links…). It also checks that they all use the same review, fill and profile steps, and that every function the page or notebook calls exists. A new option added to `prepare()` makes the tests fail until all three interfaces offer it, or it is listed as an explicit exception (the local AI reader is Python-only).
 - **Permissions:** the workflows ask for the write access they need in their own files, so they work even when the organisation keeps the default workflow permission at *read-only*. If the organisation does not allow Actions to open pull requests, the template check pushes its update to a branch and opens an issue with a link instead.
+
+## Changelog
+
+- **v1.1** – Reads tables (primer/probe rows and columns, labelled blocks, recipe lists, appendices after the references); targeted qPCR/dPCR assays with probes, LOD/LOQ and per-assay `assay_type`; several primer pairs per marker; specificity tables recognised. Benchmark 43% → 60% right.
+- **v1.0** – First release: browser, Colab and Python; review step; validation; profiles; extra sources (protocols.io, Zenodo, GitHub, ENA/SRA).
 
 ## Licence
 

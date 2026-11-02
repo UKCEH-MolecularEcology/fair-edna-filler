@@ -379,6 +379,7 @@ OUTPUT_DIR = APP_DIR / 'outputs'
 UPLOAD_DIR = APP_DIR / 'uploads'     # reserved for batch processing (multiple reports / a folder)
 
 # FAIRe FULL template this tool is tested against. Updated by .github/workflows/check-template.yml
+TOOL_VERSION = '1.1'
 TEMPLATE_VERSION = '1.0.2'
 TEMPLATE_FILE = f'FAIRe_checklist_v{TEMPLATE_VERSION}_FULLtemplate.xlsx'
 TEMPLATE_URL = f'https://github.com/FAIR-eDNA/FAIRe_checklist/raw/main/{TEMPLATE_FILE}'   # official source
@@ -664,6 +665,169 @@ def markers_in(s: str) -> list[str]:
         c = canon_marker(m)
         if c not in out: out.append(c)
     return out
+
+
+# ── targeted assays (qPCR / ddPCR / dPCR) and oligonucleotide tables ─────────
+TMARKER_RE = r'(?:mt-?)?(?:ND[1-6]L?|nd[1-6]|D-?[Ll]oop|d-?loop|COIII|COII|CytB|cytb|Cyt ?b|COI|CO1|12S|16S|18S|rbcL|ITS2?)'
+GENE_PHRASES = [
+    (r'cytochrome[- ]b\b', 'CytB'), (r'cytochrome c oxidase (?:subunit )?(?:III|3)\b', 'COIII'),
+    (r'cytochrome c oxidase (?:subunit )?(?:II|2)\b', 'COII'), (r'cytochrome c oxidase(?: (?:subunit )?(?:I|1)\b)?', 'COI'),
+    (r'NADH[- ]dehydrogenase (?:subunit )?([1-6])', 'ND'), (r'\bcontrol region\b', 'D-loop'),
+    (r'\b12S rRNA\b|mt-?RNR1', '12S'), (r'\b16S rRNA\b|mt-?RNR2', '16S')]
+for _g in ('ND1', 'ND2', 'ND3', 'ND4', 'ND4L', 'ND5', 'ND6', 'D-loop', 'COII', 'COIII'): TARGET_GENE.setdefault(_g, _g)
+TARGETED_WORDS = re.compile(r'\bqPCR\b|\bddPCR\b|\bdPCR\b|digital PCR|droplet digital|real[- ]time (?:PCR|quantitative)|quantitative PCR|'
+                            r'TaqMan|\bprobes?\b|\bC[tq] values?\b|species[- ]specific (?:assay|qPCR|PCR)|single[- ]species (?:assay|qPCR)', re.I)
+SEQ_WORDS = re.compile(r'metabarcod|amplicon sequencing|high[- ]throughput sequencing|\bIllumina\b|MiSeq|NovaSeq|NextSeq|Nanopore|'
+                       r'sequencing librar|library prep', re.I)
+DYES = r'(?:6-?FAM|FAM|HEX|VIC|NED|TET|JOE|ROX|Cy5|Cy3|ABY|JUN|Texas Red|ATTO ?\d{3})'
+QUENCHERS = r'(?:BHQ-?[123]|MGB-?NFQ|NFQ-?MGB|MGB|NFQ|QSY\d*|ZEN|3IABkFQ|IBFQ|Iowa Black(?: ?FQ)?|TAMRA|BBQ|Dabcyl|DDQ)'
+QPCR_INSTRUMENTS = (r'((?:Bio-?Rad )?CFX ?(?:96|384|Opus|Connect|Duet)(?: Touch)?|QuantStudio ?\d+(?: Flex)?|StepOne(?:Plus)?|'
+                    r'(?:Applied Biosystems )?7[59]00(?: Fast)?(?: Real-Time PCR System)?|LightCycler ?\d+|QX ?(?:200|ONE|600)|QIAcuity(?: One| Four| Eight| digital PCR system| dPCR system| instrument)|'
+                    r'Rotor-Gene(?: Q)?|Mic qPCR|AriaMx|Mx3005P|ViiA ?7|Naica|Absolute Q)(?! Probe| PCR [Kk]it| [Kk]it)')
+
+
+def canon_gene(tok: str) -> str:
+    t = re.sub(r'^mt-?', '', tok.strip(), flags=re.I)
+    u = t.upper().replace(' ', '')
+    if re.fullmatch(r'ND[1-6]L?', u): return u
+    if re.fullmatch(r'D-?LOOP', u): return 'D-loop'
+    if u in ('COII', 'COIII'): return u
+    if u == 'CYTB': return 'CytB'
+    return canon_marker(t)
+
+
+def genes_in(s: str) -> list[str]:
+    """Genes named in a passage (abbreviations and full names), in order of appearance."""
+    hits = [(m.start(), canon_gene(m.group(0))) for m in re.finditer(r'(?<![A-Za-z0-9])' + TMARKER_RE + r'(?![A-Za-z0-9])', s)]
+    for pat, g in GENE_PHRASES:
+        hits += [(m.start(), 'ND' + m.group(1) if g == 'ND' else g) for m in re.finditer(pat, s, re.I)]
+    out = []
+    for _, g in sorted(hits):
+        if g not in out: out.append(g)
+    return out
+
+
+OLIGO_LABEL = re.compile(r'(?:^|[\s(|:;,])(forward|fwd|reverse|rev|probe)\b', re.I)
+GENERIC_WORDS = re.compile(r'^(?:forward|reverse|fwd|rev|primers?|probes?|sequences?|oligo(?:nucleotide)?s?|names?|target|assay|'
+                           r'and|or|the|of|with|primer|component|5|3)$', re.I)
+
+
+def oligo_records(text: str) -> list[dict]:
+    """Primer and probe sequences with role, name, dyes and gene, from sentences and from table rows.
+
+    Works on the raw text with its line breaks, so table rows such as
+    'TCCB.probe  FAM-CATCC…-BHQ1' or 'Forward Primer: CGAAGG…' keep their labels."""
+    IUPAC = 'ACGTRYKMSWBDHVNI'
+    t = text.replace('−', '-').replace('–', '-').replace('′', "'").replace('’', "'")
+    for _ in range(4):
+        t = re.sub(r'\b([' + IUPAC + r']{8,})[ \t]*\n[ \t]*([' + IUPAC + r']{2,})\b(?![ \t]+[' + IUPAC + r']{12,})(?![.\-]?[a-z])', r'\1\2', t)
+    out, seen = [], set()
+    for m in re.finditer(r'(?<![A-Za-z0-9])([' + IUPAC + r']{15,45})(?![A-Za-z0-9])', t):
+        seq = m.group(1)
+        if sum(c in 'ACGT' for c in seq) < 0.6 * len(seq): continue
+        ls = t.rfind('\n', 0, m.start()) + 1
+        le = t.find('\n', m.end()); le = len(t) if le < 0 else le
+        line_before, line_after = t[ls:m.start()], t[m.end():le]
+        prev_lines = t[max(0, t.rfind('\n', 0, max(0, ls - 1)) + 1): ls]
+        pre, post = t[max(0, m.start() - 30): m.start()], t[m.end(): m.end() + 30]
+        rep_ = re.search(DYES + r"\W{0,4}(?:5'?\W{0,3})?$", pre)
+        q = re.search(r"^\W{0,4}(?:3'?\W{0,3})?" + QUENCHERS, post) or re.search(r"^\W{0,4}" + QUENCHERS, post)
+        label_zone = line_before[-60:] if line_before.strip() else prev_lines[-60:]
+        local = re.split(r"[;,(]|\s{2,}|\t", line_before)[-1]               # the table cell / phrase just before the sequence
+        name = None
+        for tok in reversed(re.findall(r"[A-Za-z0-9][\w.\-/]*", re.sub(DYES + r"\W*$|5'\W*$", '', local))):
+            if GENERIC_WORDS.match(tok) or len(tok) > 25 or re.fullmatch(r'[ACGTRYKMSWBDHVNI]{8,}\W*\d*', tok): continue
+            if re.search(r'\d', tok) or len(re.findall(r'[A-Z]', tok)) >= 2: name = tok; break
+        role = None
+        if rep_ or q or re.search(r'probe', label_zone, re.I) or (name and re.search(r'(?:[._\-]probe|[._\-]?P(?:r|rb)?)$', name, re.I) and not re.search(r'primer', label_zone, re.I)):
+            role = 'probe'
+        else:
+            lab = [x.group(1).lower() for x in OLIGO_LABEL.finditer(label_zone)]
+            if lab: role = 'fwd' if lab[-1] in ('forward', 'fwd') else 'rev' if lab[-1] in ('reverse', 'rev') else None
+            if role is None and name:
+                if re.search(r'(?:F|Fw|Fwd|For|L)$|[._\-]f$', name): role = 'fwd'
+                elif re.search(r'(?:R|Rv|Rev)$|[._\-]r$', name): role = 'rev'
+        window = t[max(0, m.start() - 600): m.start()]
+        tw, sw = list(TARGETED_WORDS.finditer(window)), list(SEQ_WORDS.finditer(window))
+        targeted = role == 'probe' or (bool(tw) and (not sw or tw[-1].start() > sw[-1].start()))
+        genes = genes_in(window[-400:] + line_before + line_after)
+        label = None
+        for ln in reversed(prev_lines.strip().splitlines()[-3:] if prev_lines.strip() else []):
+            mm = re.match(r'\s*([A-Za-z][\w.\-]*\d[\w.\-]*)\s*(?:\(|$)', ln)
+            if mm and not re.search('[' + IUPAC + ']{15,}', ln): label = mm.group(1); break
+        key = (seq, role)
+        if key in seen: continue
+        seen.add(key)
+        out.append({'seq': seq, 'role': role, 'name': name, 'reporter': rep_.group(0).strip(" -/5'") if rep_ else None,
+                    'quencher': q.group(0).strip(" -/3'") if q else None, 'gene': genes[-1] if genes else None,
+                    'targeted': targeted, 'label': label, 'pos': m.start(),
+                    'src': norm(t[max(0, m.start() - 160): m.end() + 40])})
+    return out
+
+
+def _same_site(x: str, y: str) -> bool:
+    """Two oligos bind the same site (≥70 % identical, either strand)."""
+    comp = str.maketrans('ACGTRYKMBDHVN', 'TGCAYRMKVHDBN')
+    if not x or not y: return x == y
+    for z in (y, y.translate(comp)[::-1]):
+        if abs(len(x) - len(z)) <= 2:
+            n = min(len(x), len(z))
+            if sum(a_ == b_ for a_, b_ in zip(x[:n], z[:n])) >= 0.7 * n: return True
+    return False
+
+
+def oligo_groups(recs: list[dict]) -> list[dict]:
+    """Group primer/probe records into assays: forward + reverse (+ probe)."""
+    # specificity / alignment tables repeat the same primer sites for many species: keep the first of each family
+    fam = [[j for j, o in enumerate(recs) if _same_site(r['seq'], o['seq'])] for r in recs]
+    recs = [r for i, r in enumerate(recs) if len(fam[i]) < 3 or fam[i][0] == i or r.get('role')]
+    groups = []
+    for r in recs:
+        g = groups[-1] if groups else None
+        role = r['role'] or next((x for x in ('fwd', 'rev', 'probe') if g and not g.get(x) and (x != 'probe' or g.get('targeted') or r['targeted'])), 'fwd')
+        if not g: role = r['role'] or 'fwd'
+        new = g is None or g.get(role) or (r['label'] and g.get('label') and r['label'] != g['label']) or r['pos'] - g['last'] > 2500
+        if new:
+            g = {'label': r['label'], 'gene': r['gene'], 'targeted': r['targeted'], 'first': r['pos'], 'src': r['src']}
+            groups.append(g)
+        g[role] = r; g['last'] = r['pos']
+        g['targeted'] = g['targeted'] or r['targeted'] or role == 'probe'
+        g['gene'] = g.get('gene') or r['gene']
+        g['label'] = g.get('label') or r['label']
+    for g in groups:
+        names = [g[k]['name'] for k in ('fwd', 'rev') if g.get(k) and g[k].get('name')]
+        stem = None
+        if len(names) == 2:
+            a, b = names
+            i = 0
+            while i < min(len(a), len(b)) and a[i] == b[i]: i += 1
+            stem = a[:i].rstrip('._-') if i >= 3 else None
+        g['name'] = g.get('label') or stem or (g['probe']['name'].split('.')[0] if g.get('probe') and g['probe'].get('name') else None)
+    groups = [g for g in groups if (g.get('fwd') and g.get('rev')) or (g.get('probe') and (g.get('fwd') or g.get('rev')))]
+    # specificity / alignment tables list the same primer sites in many species: keep the first of each family
+    similar = _same_site
+    kept = []
+    for g in groups:
+        dup = next((k for k in kept if similar((g.get('fwd') or {}).get('seq'), (k.get('fwd') or {}).get('seq'))
+                    and similar((g.get('rev') or {}).get('seq'), (k.get('rev') or {}).get('seq'))), None)
+        if dup:                                                       # same assay again (or a specificity table row): merge
+            for kk in ('gene', 'name', 'label', 'probe'):
+                if g.get(kk) and not dup.get(kk): dup[kk] = g[kk]
+            dup['targeted'] = dup['targeted'] or g['targeted']
+            continue
+        kept.append(g)
+    return kept
+
+
+def pipe_rows(text: str) -> dict:
+    """Assay-per-column table rows -> {label (lower): [a, b, c]}.
+
+    'Label: a | b | c', 'Label<TAB>a<TAB>b' and 'Label  a  b  c' (two or more spaces) are read."""
+    rows = {}
+    for m in re.finditer(r'^[ \t]*([A-Za-z][^:\n|\t]{1,40}?)(?::[ \t]*|\t+| {2,})([^\n]+)$', text, re.M):
+        cells = re.split(r'\s*\|\s*|\t+| {2,}', m.group(2).strip())
+        if len(cells) >= 2: rows.setdefault(m.group(1).strip().lower(), [c for c in cells if c])
+    return rows
 
 
 def sentences(text: str) -> list[str]:
@@ -1003,13 +1167,19 @@ def extract(text: str) -> dict:
     text = strip_line_numbers(text)
     text = despace_headings(text)
     text = re.sub('[\ue000-\uf8ff]', '', text)                     # private-use glyphs (bullets)
-    text = re.sub(r'(?<=[a-z])-\n(?=[a-z])', '-', text)              # "high-\nfidelity"
-    text = re.sub(r'(?<=\d)\s?(?:o|º|˚)C\b|℃', '°C', text)            # "98oC", "60℃" -> °C
+    _words = set(re.findall(r'[a-z]{5,}', text.lower()))
+    text = re.sub(r'([A-Za-z]+)-\n([a-z]+)', lambda m_: m_.group(1) + m_.group(2) if (m_.group(1) + m_.group(2)).lower() in _words
+                  else m_.group(1) + '-' + m_.group(2), text)          # "tem-\nplate" -> "template", "high-\nfidelity" stays
+    text = re.sub(r'(?<=\d)\s?(?:o|º|˚|⁰)C\b|℃', '°C', text)            # "98oC", "60℃" -> °C
     text = re.sub(r'(?<=[a-z]) - ?\n?(?=[a-z]{3,})', '', text)          # "tem -\nperature"
     refs = references(text)
     cuts = [m for m in re.finditer(r'\n[ \t]*(?:\d+\.\s*)?(?:References(?: to published material)?|REFERENCES|Literature [Cc]ited|Bibliography)[ \t]*(?:\n|\t)', text)
             if m.start() > 0.3 * len(text)]                 # skip a table of contents
     cut = cuts[0] if cuts else None
+    appendix = ''
+    if cut:                                               # appendices after the reference list often hold lab protocols
+        ap = re.search(r'\n[ \t]*(?:Appendix|APPENDIX|Annex|ANNEX|Supplementary (?:Methods|Information))\b[^\n]{0,100}\n', text[cut.start():])
+        if ap: appendix = text[cut.start() + ap.start():].replace('\u03bc', '\u00b5')
     text = text[:cut.start()] if cut else text            # body only from here on
     text = text.replace('\u03bc', '\u00b5')                # Greek mu -> micro sign
     flat = norm(text)
@@ -1580,10 +1750,137 @@ def extract(text: str) -> dict:
         mks = [m for m in markers_in(sentence) if m in assays]
         return mks or carry or list(assays)
 
+    # ── targeted assays: primer/probe sets read from sentences and tables ────────
+    body_plus = text + ('\n' + appendix if appendix else '')
+    t_groups = oligo_groups([r for r in oligo_records(body_plus) if r['targeted']])
+    prow = pipe_rows(body_plus)
+    gene_cols = next((v for k_, v in prow.items() if re.search(r'target(?:ed)? gene|\bgene\b|\bmarker\b|\blocus\b', k_)), None)
+    name_cols = next((v for k_, v in prow.items() if re.search(r'assay(?: name)?$|assay id', k_)), None)
+    methods_flat = norm(mtext or text)
+    targeted_study = len(TARGETED_WORDS.findall(methods_flat)) >= 3
+    if targeted_study and not t_groups and not SEQ_WORDS.search(methods_flat):
+        gs = genes_in(' '.join(x for x in fsents if TARGETED_WORDS.search(x)))
+        t_groups = [{'gene': gs[0] if gs else None, 'name': None, 'targeted': True, 'src': next((x for x in fsents if TARGETED_WORDS.search(x)), None)}]
+
+    def new_key(base):
+        base = re.sub(r'[^\w.\-]+', '_', base).strip('_') or 'assay'
+        k_, n_ = base, 2
+        while k_ in assays: k_, n_ = f'{base}_{n_}', n_ + 1
+        return k_
+
+    t_keys = []
+    for gi, g in enumerate(t_groups):
+        gene = g.get('gene')
+        if gene_cols and len(gene_cols) == len(t_groups): gene = canon_gene(gene_cols[gi]) or gene
+        nm_ = g.get('name') or (name_cols[gi] if name_cols and len(name_cols) == len(t_groups) else None)
+        k_ = new_key(f'{gene}_{nm_ or "targeted"}' if gene else (nm_ or 'targeted'))
+        a = {'marker': k_, 'gene': gene, 'assay_type': 'targeted', 'assay_name': nm_ or k_,
+             'target_gene': TARGET_GENE.get(gene) if gene in TARGET_GENE else (f'other: {gene}' if gene else None)}
+        assays[k_] = a; t_keys.append(k_)
+        if g.get('src'): cite(f'{k_}.assay_type', g['src']); cite(f'{k_}.target_gene', g['src'] if gene else None)
+        for role in ('fwd', 'rev'):
+            r = g.get(role)
+            if not r: continue
+            a[f'primer_{role}'] = r['seq']; cite(f'{k_}.primer_{role}', r['src'])
+            if r.get('name') and r['name'] != nm_: a[f'primer_name_{role}'] = r['name']; cite(f'{k_}.primer_name_{role}', r['src'])
+        pr = g.get('probe')
+        if pr:
+            a['probe_seq'] = pr['seq']; cite(f'{k_}.probe_seq', pr['src'])
+            if pr.get('reporter'): a['probeReporter'] = pr['reporter']; cite(f'{k_}.probeReporter', pr['src'])
+            if pr.get('quencher'): a['probeQuencher'] = pr['quencher']; cite(f'{k_}.probeQuencher', pr['src'])
+        a['_names'] = sorted({x for x in [nm_] + [g[r]['name'] for r in ('fwd', 'rev', 'probe') if g.get(r) and g[r].get('name')] if x}, key=len)
+    if t_keys:
+        lod_rows = [(k_, v) for k_, v in prow.items() if re.match(r'(?:lod|limit of detection|loq|limit of quantification)\b', k_) and len(v) == len(t_keys)]
+        unit_hint = re.search(r'cop\w*\s*(?:#\s*)?/\s*(rxn|reaction|well|[µu]L)|cop\w* per (reaction|[µu]L)', body_plus, re.I)
+        for lab, vals in lod_rows:
+            kind = 'lod' if re.match(r'lod|limit of detection', lab) else 'loq'
+            for k_, v in zip(t_keys, vals):
+                num = re.match(r'\s*(\d+(?:\.\d+)?)', v)
+                if num:
+                    assays[k_][f'pcr_assay_{kind}'] = num.group(1); cite(f'{k_}.pcr_assay_{kind}', f'{lab}: ' + ' | '.join(vals))
+                    if unit_hint: assays[k_][f'pcr_assay_{kind}_unit'] = 'copies/' + ('reaction' if re.match(r'rxn|reaction|well', unit_hint.group(1) or unit_hint.group(2) or '', re.I) else 'µL')
+        dig = len(re.findall(r'\bdd?PCR\b|digital PCR|droplet digital', methods_flat, re.I)); rt = len(re.findall(r'\bqPCR\b|real[- ]time|quantitative PCR', methods_flat, re.I))
+        for k_ in t_keys: assays[k_]['amp_vis_method'] = 'dPCR' if dig > rt else 'qPCR'
+    mb_keys = [k_ for k_ in assays if k_ not in t_keys]
+    one_assay = mb_keys[0] if len(mb_keys) == 1 else None
+
+    def t_named(s_):
+        """Targeted assays a passage names (assay or oligo names, else its gene)."""
+        hit = [k_ for k_ in t_keys if any(re.search(r'(?<![\w.])' + re.escape(n_) + r'(?![\w])', s_) for n_ in assays[k_].get('_names', []))]
+        if not hit and TARGETED_WORDS.search(s_):         # gene named in a qPCR/dPCR passage
+            gs = genes_in(s_)
+            hit = [k_ for k_ in t_keys if assays[k_].get('gene') and assays[k_]['gene'] in gs]
+        return hit
+
+    def pcr_details(k_, s_, specific, done):
+        """Reaction details for one targeted assay from a sentence or a protocol block (recipe lists included)."""
+        s_ = norm(s_.replace('−', '-').replace('μ', 'µ'))
+        if not re.search(r'µ[lL]|cycles?|°\s*C|[Mm]aster ?[Mm]ix|[Ss]upermix|[Pp]olymerase|PCR|replicate|probe', s_, re.I): return
+        ov = specific and k_ not in done
+        cyc = re.search(r'(\d{2})\s*(?:PCR\s*|amplification\s*)?cycles\b', s_) or re.search(r'\b(?:number of )?cycles\W{1,3}(\d{2})\b', s_, re.I)
+        if cyc and 15 <= int(cyc.group(1)) <= 60: put_a(k_, 'pcr_cycles', cyc.group(1), s_, override=ov)
+        ann = re.search(r'anneal\w*(?:[^.;°]{0,40}?)(\d{2}(?:\.\d)?)\s*°\s*C', s_, re.I) or \
+              re.search(r'(\d{2}(?:\.\d)?)\s*°\s*C(?:(?!°)[^.;,]){0,25}\banneal', s_, re.I) or \
+              re.search(r'cycles? of\s+(?:\d+\s*(?:s|sec\w*|min\w*)\s+(?:at\s+)?9\d\s*°\s*C|9\d\s*°\s*C\s+for\s+\d+\s*(?:s|sec\w*|min\w*))\s*(?:,|and)\s*'
+                        r'(?:\d+\s*(?:s|sec\w*|min\w*)\s+(?:at\s+)?(\d{2}(?:\.\d)?)\s*°\s*C|(\d{2}(?:\.\d)?)\s*°\s*C)', s_, re.I)
+        if ann:
+            v = next(x for x in ann.groups() if x)
+            if 45 <= float(v) <= 72: put_a(k_, 'annealingTemp', v, s_, override=ov)
+        tot = re.search(r'(?:total|final|reaction)\s+volumes?\s+(?:of\s+)?(\d+(?:\.\d+)?)\s*µ[lL]', s_, re.I) or \
+              re.search(r'(\d+(?:\.\d+)?)[ -]?µ[lL]\s+(?:q?PCR\s+|dPCR\s+|ddPCR\s+)?reactions?\b', s_, re.I)
+        if tot and float(tot.group(1)) <= 100: put_a(k_, 'amplificationReactionVolume', tot.group(1), s_)
+        two = re.search(r'(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:of\s+)?(?:\w+\s+)?(?:template|DNA|eDNA|extract)\b[^.;]{0,40}?\band\s+(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:of\s+)?(?:\w+\s+)?(?:master ?mix|mastermix|reaction mix|PCR mix|mix)\b', s_, re.I) or \
+              re.search(r'(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:of\s+)?(?:\w+\s+)?(?:master ?mix|mastermix|reaction mix|PCR mix)\b[^.;]{0,40}?\band\s+(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:of\s+)?(?:\w+\s+)?(?:template|DNA|eDNA|extract)\b', s_, re.I)
+        if two and not tot: put_a(k_, 'amplificationReactionVolume', f'{float(two.group(1)) + float(two.group(2)):g}', s_)
+        items = re.findall(r'(?:^|[\s;,:])([a-z])[.)]\s*(\d+(?:\.\d+)?)\s*µ[lL]\b([^;]{0,90})', s_)
+        letters = [ord(x[0]) for x in items]
+        items = [(v, rest) for _, v, rest in items] if letters and letters == list(range(letters[0], letters[0] + len(letters))) else []
+        if len(items) >= 3 and not tot:            # recipe list: a. 3 µL template, b. 1 µL of each primer/probe (…), c. 12.5 µL mix, d. water
+            total = 0.0
+            for v, rest in items:
+                each = re.search(r'\beach\b', rest)
+                n = 1
+                if each:
+                    inside = re.search(r'\(([^)]*)', rest)
+                    n = len(re.findall(r';', inside.group(1))) + 1 if inside and ';' in inside.group(1) else (3 if re.search(r'primers?/probe|primer and probe', rest) else 2)
+                total += float(v) * n
+            if total <= 100: put_a(k_, 'amplificationReactionVolume', f'{total:g}', s_)
+        dna = re.search(r'(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:of\s+)?(?:the\s+)?(?:\w+\s+){0,2}?(?:template|DNA|eDNA|extract)\b', s_, re.I)
+        if dna and 'elut' not in s_.lower()[max(0, dna.start() - 40): dna.end()] and float(dna.group(1)) <= 20: put_a(k_, 'pcr_dna_vol', dna.group(1), s_)
+        mm = re.search(MM, s_)
+        if mm: put_a(k_, 'commercial_mm', norm(mm.group(1)), s_)
+        rp = re.search(r'\b(?:in|run in|performed in|carried out in|run as|tested in)\s+(duplicate|triplicate|quadruplicate)', s_, re.I) or \
+             re.search(r'(?<![/\d.])\b(two|three|four|five|six|eight|ten|twelve|\d+)\s+(?:independent\s+|technical\s+|replicate\s+|qPCR\s+|PCR\s+|dPCR\s+|ddPCR\s+)*(?:replicates?|reactions? per sample)\b', s_, re.I)
+        if rp:
+            r_ = rp.group(1).lower()
+            n = {'duplicate': 2, 'triplicate': 3, 'quadruplicate': 4}.get(r_) or num_word(r_)
+            if n and n < 50: put_a(k_, 'pcr_rep', str(n), s_)
+        for v, unit, nm_ in re.findall(r'(\d+(?:\.\d+)?)\s*(µmol/L|µM|nM)\s+(?:of\s+)?([A-Za-z][\w.\-]*)', s_):
+            names = assays[k_].get('_names', [])
+            conc = f'{float(v) / 1000:g}' if unit == 'nM' else v
+            if re.search(r'probe', nm_, re.I) or (assays[k_].get('probe_seq') and nm_.lower().endswith(('p', 'pr'))):
+                if not names or any(n_ in nm_ for n_ in names): put_a(k_, 'probe_conc', conc, s_)
+            elif not names or any(n_ in nm_ for n_ in names):
+                put_a(k_, 'pcr_primer_conc', conc, s_)
+        cfg = re.search(r'(?:conditions?|program(?:me)?|profile|cycling)[^:]{0,40}:\s*((?:[^.]*?\d+\s*°C){3,}[^.]*)', s_, re.I) or \
+              re.search(r'((?:initial|activation)[^.]{0,80}?\d+\s*°\s*C[^.]{0,200}?\d{2}\s*cycles[^.]{0,200})', s_, re.I)
+        if cfg: put_a(k_, 'pcr_cond', norm(cfg.group(1))[:300], s_)
+        th = re.search(QPCR_INSTRUMENTS, s_)
+        if th: put('thermocycler', th.group(1), s_)
+        lod = re.search(r'\b(?:LOD|limit of detection)\b[^.;]{0,40}?(?:was|of|=|:)\s*(\d+(?:\.\d+)?)\s*(copies|copy)\s*(?:/|per)\s*(µ[lL]|reaction|rxn|well|L)\b', s_, re.I)
+        if lod: put_a(k_, 'pcr_assay_lod', lod.group(1), s_); put_a(k_, 'pcr_assay_lod_unit', f'copies/{lod.group(3)}', s_)
+        loq = re.search(r'\b(?:LOQ|limit of quantification)\b[^.;]{0,40}?(?:was|of|=|:)\s*(\d+(?:\.\d+)?)\s*(copies|copy)\s*(?:/|per)\s*(µ[lL]|reaction|rxn|well|L)\b', s_, re.I)
+        if loq: put_a(k_, 'pcr_assay_loq', loq.group(1), s_); put_a(k_, 'pcr_assay_loq_unit', f'copies/{loq.group(3)}', s_)
+        if re.search(r'gBlock|synthetic (?:DNA|oligo|gene|standard)|plasmid standard|standard curve', s_, re.I):
+            st = re.search(r'gBlock|synthetic \w+|plasmid', s_, re.I)
+            if st: put_a(k_, 'std_type', {'gblock': 'gBlock'}.get(st.group(0).lower(), st.group(0).lower()), s_)
+        done.add(k_)
+
     # PCR, per assay
     MM = (r'((?:Q5|Phusion|Platinum|KAPA|AmpliTaq|GoTaq|MyTaq|HotStar|Phire|TaqMan|Qiagen Multiplex|QIAGEN Multiplex|Multiplex PCR'
-          r'|Environmental Master|Invitrogen|Takara|Accuprime|AccuPrime|Bioline|NEBNext|OneTaq|DreamTaq|Maxima|PrimeSTAR|Ex Taq)'
-          r'[\w®™\-.,/ ]{0,45}?(?:Master ?[Mm]ix|ReadyMix|Mastermix|[Mm]ix|PCR Kit|Kit|[Pp]olymerase|Gold|Taq)(?:\s*\d\.\d)?)')
+          r'|Environmental Master|Invitrogen|Takara|Accuprime|AccuPrime|Bioline|NEBNext|OneTaq|DreamTaq|Maxima|PrimeSTAR|Ex Taq'
+          r'|QIAcuity|ddPCR|TaqPath|PrimeTime|Luna|SsoAdvanced|SsoFast|PowerUp|PowerTrack|SensiFAST|PerfeCTa|GoTaq Probe|Fast Advanced)'
+          r'[\w®™\-.,/ ]{0,45}?(?:Master ?[Mm]ix|ReadyMix|Mastermix|[Mm]ix|Supermix|PCR Kit|[Kk]it|[Pp]olymerase|Gold|Taq)(?:\s*\d\.\d)?)')
     carry = None
     pcr_segments = []
     for sent in fsents:
@@ -1595,12 +1892,34 @@ def extract(text: str) -> dict:
         named = [m for m in markers_in(s) if m in assays] or ([one_assay] if one_assay else [])
         if amp and named and re.search(r'amplif|primer|target', s, re.I):
             for mk in named: put_a(mk, 'ampliconSize', amp.group(1), s)
+    t_done, t_carry, last_sent, t_weak = set(), (None, 0), None, {}
     for seg_mk, s, sent in pcr_segments:
-        named = [seg_mk] if seg_mk else [m for m in markers_in(s) if m in assays]
+        named = [seg_mk] if seg_mk else [m for m in markers_in(s) if m in mb_keys]
+        tn = t_named(s) if t_keys else []
+        if sent is not last_sent: t_carry = (t_carry[0], t_carry[1] - 1) if t_carry[1] > 0 else (None, 0)
+        last_sent = sent
+        mb_turn = named or SEQ_WORDS.search(s) or re.search(r'first[- ](?:round|step) PCR|PCR\s*1\b|librar', s, re.I)
+        if t_keys and (tn or (TARGETED_WORDS.search(s) and not SEQ_WORDS.search(s) and not named) or (t_carry[0] and not mb_turn)):
+            explicit = bool(tn) or bool(TARGETED_WORDS.search(s))
+            ks = tn or (t_carry[0] if t_carry[0] and not TARGETED_WORDS.search(s) else t_keys)
+            for k_ in ks:
+                before_ = dict(assays[k_])
+                if explicit:                                  # an explicit qPCR/dPCR sentence beats values carried over from a neighbour
+                    weak = t_weak.get(k_, set())
+                    for f_ in weak: assays[k_].pop(f_, None)
+                pcr_details(k_, s, bool(tn), t_done)
+                if explicit:
+                    for f_ in list(t_weak.get(k_, set())):
+                        if f_ not in assays[k_]: assays[k_][f_] = before_[f_]
+                        else: t_weak[k_].discard(f_)
+                else:
+                    t_weak.setdefault(k_, set()).update(f_ for f_ in assays[k_] if f_ not in before_)
+            t_carry = (ks, 2); carry = None; continue
+        if mb_turn: t_carry = (None, 0)
         if re.search(r'\bqPCR\b|real[- ]time|\bprobe\b|\bC[tq]\b|ddPCR|\bdPCR\b|single[- ]species|TaqMan', s) and not named: carry = None; continue
         if re.search(r'second[- ](?:step|round|stage)|step[- ](?:2|II)\b|index(?:ing)?\s+PCR|\bPCR\s*2\b|PCR2\b|second PCR|library PCR', s, re.I):
             continue                                   # indexing PCR: not the assay's own amplification
-        mks = named or carry or list(assays)
+        mks = named or carry or list(mb_keys)
         carry = named or carry
         cyc = re.search(r'(\d{2})\s*cycles?\s*(?:of|consisting of|comprising|each of|:)?\s*[^.;]{0,30}?(\d{2,3}(?:\.\d)?)\s*°\s*C[^,;]{0,30}[,;]\s*(?:followed by\s*)?(?:and\s*)?(\d{2}(?:\.\d)?)\s*°\s*C', s)
         ann = re.search(r'anneal\w*(?:[^.;°]{0,40}?)(\d{2}(?:\.\d)?)\s*°\s*C', s, re.I) or \
@@ -1638,6 +1957,23 @@ def extract(text: str) -> dict:
                 n = {'duplicate': 2, 'triplicate': 3, 'quadruplicate': 4}.get(r) or num_word(r)
                 if n and n < 20: put_a(mk, 'pcr_rep', str(n), s)
 
+    if t_keys:
+        all_names = {n_ for k_ in t_keys for n_ in assays[k_].get('_names', [])}
+        proto = (mtext or text) + ('\n' + appendix if appendix else '')       # methods and appendices only
+        proto = re.sub(r'(?m)^.*\bPage \d+ of \d+\b.*\n?', '', proto)              # running page headers
+        heads = [m_.start() + 1 for m_ in re.finditer(r'\n[ \t]*(?:\d+(?:\.\d+)*\.?\s+)?[A-Z][^\n.:;,]{2,60}[ \t]*\n', proto)]
+        cuts_ = [0] + heads + [len(proto)]
+        for b0, b1 in zip(cuts_, cuts_[1:]):
+            blk = proto[b0:b1]
+            if not TARGETED_WORDS.search(blk) and not t_named(blk): continue
+            if SEQ_WORDS.search(blk): continue                 # mixed methods text: handled sentence by sentence above
+            hit = t_named(blk)
+            foreign = re.findall(r'(?:µmol/L|µM|nM)\s+(?:of\s+)?([A-Za-z][\w.\-]*\d*[\w.\-]*)', blk) + re.findall(r'\b(\w+\.probe)\b', blk)
+            foreign = [f_ for f_ in foreign if not any(n_ in f_ or f_ in n_ for n_ in all_names) and not re.match(r'(?:each|the|of|primers?|probes?|forward|reverse)$', f_, re.I)]
+            if not hit and foreign: continue
+            for k_ in hit or (t_keys if len(t_keys) == 1 or re.search(r'\beach (?:assay|target)|all (?:three|four|two|\d) assays|the (?:three|four|two) assays', blk, re.I) else []):
+                pcr_details(k_, blk, False, t_done)
+
     # primers: DNA sequences in the text (tables included), adapters/probes removed
     NEXTERA_F, NEXTERA_R = 'TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG', 'GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG'
     IUPAC = 'ACGTRYKMSWBDHVNI'
@@ -1645,7 +1981,7 @@ def extract(text: str) -> dict:
     for _ in range(4):   # only sequences wrapped over a line break: "…AGACAGTA\nGAACAGGC…"
         wrapped = re.sub(r'\b([' + IUPAC + r']{8,})[ \t]*\n[ \t]*([' + IUPAC + r']{2,})\b(?![ \t]+[' + IUPAC + r']{12,})(?![.\-]?[a-z])', r'\1\2', wrapped)
     joined = norm(wrapped).replace('μ', 'µ')
-    seen_seq, order = set(), {}
+    seen_seq, order, cur_pair = set(), {}, None
     for m in re.finditer(r'(?<![A-Za-z])([' + IUPAC + r']{15,})(?![A-Za-z])', joined):
         seq = m.group(1)
         if sum(c in 'ACGT' for c in seq) < 0.6 * len(seq) or seq in seen_seq: continue
@@ -1656,8 +1992,9 @@ def extract(text: str) -> dict:
         if ctx and ctx[-1].group(1): continue
         if re.search(r'\bFAM\b|BHQ|\bMGB\b|quencher', joined[m.end(): m.end() + 30]): continue
         if 'AATGATACGGCGACCACC' in seq or 'CAAGCAGAAGACGGCATACGA' in seq: continue          # index adapters
+        overhang = seq.startswith(NEXTERA_F) or seq.startswith(NEXTERA_R)    # adapter + primer: the primer is kept below
         if NEXTERA_F.startswith(seq) or NEXTERA_R.startswith(seq) or \
-           re.search(r'adaptor|adapter|index|overhang|tag(?:ged)? sequence|barcode', joined[max(0, m.start() - 45): m.start()], re.I): continue
+           (not overhang and re.search(r'adaptor|adapter|index|overhang|tag(?:ged)? sequence|barcode', joined[max(0, m.start() - 45): m.start()], re.I)): continue
         direction = None
         for ov, d in ((NEXTERA_F, 'fwd'), (NEXTERA_R, 'rev')):
             if seq.startswith(ov): seq, direction = seq[len(ov):], d
@@ -1671,6 +2008,16 @@ def extract(text: str) -> dict:
         if lab: nm = [lab.group(1)]
         mk = nearest_marker(joined, m.start())
         if not mk: continue
+        if cur_pair and m.start() - cur_pair[1] < 60 and not assays[cur_pair[0]].get('primer_rev'): mk = cur_pair[0]   # second primer of the pair
+        pair = re.search(r'\b((?=[\w\-]*\d)(?=[\w\-]*[A-Za-z])[\w\-]{3,})\s*\(\s*$', near)            # "Tele01 (SEQ, SEQ, …)"
+        base = assays[mk]
+        if pair and base.get('primer_fwd') and base.get('primer_rev') and pair.group(1) != base.get('_pair_label'):
+            k2 = new_key(f"{base.get('_base', mk)}_{pair.group(1)}")       # a further primer pair for the same marker -> its own assay
+            assays[k2] = {kk: vv for kk, vv in base.items() if kk in ('target_gene', 'targetTaxonomicAssay', 'targetTaxonomicScope', 'target_subfragment')}
+            assays[k2].update(marker=k2, _base=base.get('_base', mk), assay_name=f"{base.get('_base', mk)}_{pair.group(1)}")
+            mb_keys.append(k2); mk = k2
+        if pair and not assays[mk].get('_pair_label'): assays[mk]['_pair_label'] = pair.group(1)
+        cur_pair = (mk, m.end())
         k = order.setdefault(mk, 0)
         if direction is None: direction = 'fwd' if k % 2 == 0 else 'rev'
         order[mk] = k + 1
@@ -1683,7 +2030,7 @@ def extract(text: str) -> dict:
           re.search(r'((?:MiSeq|NextSeq|NovaSeq|HiSeq|iSeq)[\w ]{0,15}?(?:Reagent\s+(?:Kit\s+)?|Nano\s+)?v\d(?:\.\d)?[^.;)]{0,25}?\d{3}[ -]?cycles?)', fl, re.I) or \
           re.search(r'((?:MiSeq|NextSeq|NovaSeq|HiSeq|iSeq)[\w ]{0,20}?(?:Reagent Kit|Nano Kit|Micro Kit|flow ?cell)[^.;)]{0,20})', fl, re.I)
     if kit:
-        for mk in assays: put_a(mk, 'seq_kit', norm(kit.group(1)), kit)
+        for mk in mb_keys: put_a(mk, 'seq_kit', norm(kit.group(1)), kit)
     if not meta.get('instrument'):
         im = re.search(r'\b(MiSeq|iSeq 100|NextSeq (?:500|550|1000|2000|1000/2000)|NovaSeq (?:6000|X(?: Plus)?)|HiSeq (?:2000|2500|4000|X)|MinION|GridION|PromethION|Ion Torrent PGM|Ion S5)\b', fl)
         if im: put('instrument', ('Illumina ' if re.match(r'MiSeq|iSeq|NextSeq|NovaSeq|HiSeq', im.group(1)) else '') + im.group(1), im)
@@ -1752,7 +2099,7 @@ def extract(text: str) -> dict:
             continue
         scope = named or (last_named if since <= 4 else []) or ([one_assay] if one_assay else [])
         for mk in scope: put_a(mk, 'otu_db', ' | '.join(dbs), s)
-    for mk in assays:
+    for mk in mb_keys:
         if tax: put_a(mk, 'tax_assign_cat', tax[0], tax[1]); put_a(mk, 'otu_seq_comp_appr', norm(tax[1].group(0)), tax[1])
 
     # sampling, filtration, storage, extraction
@@ -1807,10 +2154,31 @@ def extract(text: str) -> dict:
 
     seq_words = re.search(r'\bIllumina\b|MiSeq|NovaSeq|NextSeq|HiSeq|Nanopore|MinION|Ion Torrent|metabarcod|high[- ]throughput sequencing|amplicon sequencing', fl, re.I)
     q = re.search(r'\bqPCR\b|ddPCR|droplet digital|TaqMan|real[- ]time PCR|quantitative PCR', fl, re.I)
-    if q and not seq_words:
+    if q and not seq_words and not t_keys:
         meta['assay_type'] = 'targeted'; cite('assay_type', q)
         meta['notes'].append('This looks like a targeted (qPCR/ddPCR) study. The tool is built for metabarcoding; '
                              'targeted-assay fields (probe, standard curve, LOD/LOQ) need to be filled by hand.')
+    # further primer pairs on the same marker share the base assay's protocol unless stated otherwise
+    for k_, a in assays.items():
+        b = assays.get(a.get('_base')) if a.get('_base') and a.get('_base') != k_ else None
+        if b:
+            for kk in ('commercial_mm', 'amplificationReactionVolume', 'pcr_dna_vol', 'pcr_rep', 'annealingTemp', 'pcr_cycles', 'pcr_cond',
+                       'seq_kit', 'otu_db', 'tax_assign_cat', 'nucl_acid_amp'):
+                if b.get(kk) and not a.get(kk):
+                    a[kk] = b[kk]
+                    if f"{b['marker']}.{kk}" in evidence: evidence.setdefault(f'{k_}.{kk}', evidence[f"{b['marker']}.{kk}"])
+    types = {a.get('assay_type') or 'metabarcoding' for a in assays.values()}
+    if assays and types == {'targeted'}:
+        meta['assay_type'] = 'targeted'; cite('assay_type', evidence.get(f'{t_keys[0]}.assay_type') if t_keys else None)
+    elif len(types) > 1:
+        meta['assay_type'] = None                        # mixed: written per assay
+        for a in assays.values(): a.setdefault('assay_type', 'metabarcoding')
+    if t_keys:
+        meta['notes'] = [n_ for n_ in meta['notes'] if not n_.startswith('This looks like a targeted')]
+        meta['notes'].append('Targeted (qPCR/dPCR) assay(s) found: ' + ', '.join(assays[k_]['assay_name'] for k_ in t_keys) +
+                             '. Check the probe, LOD/LOQ and standard-curve fields; values not stated in the text are marked missing.')
+    for a in assays.values():
+        for kk in ('_names', '_pair_label', '_base'): a.pop(kk, None)
     meta['assays'] = list(assays.values())
     # biological replicates
     if meta.get('samples_per_site_round'): meta['biological_rep'] = str(meta['samples_per_site_round'])
@@ -1849,7 +2217,7 @@ def extract(text: str) -> dict:
         if sub and not a.get('target_subfragment'): a['target_subfragment'] = sub.group(1); cite(f'{mk}.target_subfragment', sub)
     rp = re.search(r'\b(Duplicate|Triplicate|Quadruplicate)\s+PCRs?\b', fl, re.I)
     if rp:
-        for mk in assays: put_a(mk, 'pcr_rep', {'duplicate': '2', 'triplicate': '3', 'quadruplicate': '4'}[rp.group(1).lower()], rp)
+        for mk in mb_keys: put_a(mk, 'pcr_rep', {'duplicate': '2', 'triplicate': '3', 'quadruplicate': '4'}[rp.group(1).lower()], rp)
     nt = next((s_ for s_ in fsents if re.search(r'remov|exclud|discard', s_, re.I) and re.search(r'human|domestic|non-?target|livestock|contamina\w+ species', s_, re.I)), None)
     if nt and not meta.get('screen_nontarget_method'): meta['screen_nontarget_method'] = nt[:400]; cite('screen_nontarget_method', nt)
     cr = re.search(r'©\s*(?:\d{4}\s+)?(The Author\(s\)|The Authors|[A-Z][^.]{2,80}?)(?:\.|\s+(?:Published|This))', text[:6000])
@@ -1857,13 +2225,13 @@ def extract(text: str) -> dict:
     if not any(a.get('otu_db') for a in assays.values()):
         db = re.search(r'((?:(?-i:[A-Z])[\w-]*\s+){0,4}(?:vertebrate|fish|eukaryote|metazoan|invertebrate|plant)?\s*(?:12S|16S|18S|COI|ITS|rbcL|CytB)\s+(?:reference\s+)?(?:database|library))(\s*\([^)]{0,80}\))?', fl, re.I)
         if db:
-            for mk in assays: put_a(mk, 'otu_db', norm(db.group(0)), db)
+            for mk in mb_keys: put_a(mk, 'otu_db', norm(db.group(0)), db)
     sk = re.search(r'(MiSeq|NovaSeq|NextSeq|iSeq|HiSeq)[^.]{0,60}?(\d)\s*[x×]\s*(\d{3})\s*(?:bp)?\s*\(?\s*(v\d)\s*(?:chemistry|reagent)', fl, re.I) or \
          re.search(r'(MiSeq|NovaSeq|NextSeq|iSeq|HiSeq)[^.]{0,60}?\b(v\d)\b\s*(\d)\s*[x×]?\s*(\d{3})\s*bp', fl, re.I)
     if sk:
         g = sk.groups()
         ver, n, ln = (g[3], g[1], g[2]) if g[1].isdigit() else (g[1], g[2], g[3])
-        for mk in assays: put_a(mk, 'seq_kit', f'{g[0]} Reagent Kit {ver.lower()} ({n} × {ln} bp)', sk)
+        for mk in mb_keys: put_a(mk, 'seq_kit', f'{g[0]} Reagent Kit {ver.lower()} ({n} × {ln} bp)', sk)
     plan = sample_plan(mtext or text, norm(mtext) if mtext else flat) or (sample_plan(text, flat) if mtext else [])
     meta['_primer_text'] = fl
     if plan:
@@ -1906,7 +2274,18 @@ ASSAY_TERMS = {
     'amplificationReactionVolume', 'pcr_dna_vol', 'pcr_rep', 'nucl_acid_amp', 'pcr_cond',
     'annealingTemp', 'pcr_cycles', 'seq_kit', 'trim_param', 'min_len_cutoff', 'otu_db',
     'tax_assign_cat', 'otu_seq_comp_appr', 'otu_final_description',
+    'probeReporter', 'probeQuencher', 'probe_seq', 'probe_ref', 'probe_conc',
 }
+TARGETED_TERMS = {   # 'Targeted assay detection' section + probes: only for targeted (qPCR/dPCR) assays
+    'probeReporter', 'probeQuencher', 'probe_seq', 'probe_ref', 'probe_conc', 'amp_vis_method', 'detection_criteria',
+    'lod_method', 'pcr_assay_lod_techreps', 'pcr_assay_lod', 'pcr_assay_lod_unit', 'pcr_assay_lod_UL', 'pcr_assay_lod_LL',
+    'loq_method', 'pcr_assay_loq_techreps', 'pcr_assay_loq', 'pcr_assay_loq_unit', 'pcr_assay_loq_UL', 'pcr_assay_loq_LL',
+    'std_type', 'std_source', 'std_seq', 'thresholdQuantificationCycle', 'baselineValue', 'automaticThresholdQuantificationCycle',
+    'automaticBaselineValue', 'targeted_detection_method_additional',
+}
+ASSAY_TERMS |= TARGETED_TERMS
+METABARCODING_TERMS = {'seq_kit', 'trim_param', 'min_len_cutoff', 'otu_db', 'tax_assign_cat', 'otu_seq_comp_appr', 'otu_final_description'}
+SEQUENCING_SECTIONS = ('Library preparation sequencing', 'Bioinformatics')
 ASSAY_KEY = {  # FAIRe term -> key in an assay dict
     'pcr_primer_name_forward': 'primer_name_fwd', 'pcr_primer_name_reverse': 'primer_name_rev',
     'pcr_primer_reference_forward': 'primer_ref_fwd', 'pcr_primer_reference_reverse': 'primer_ref_rev',
@@ -2034,6 +2413,15 @@ VOCAB_RULES = {
                                ('none', r'^none$|^dry$')],
 }
 VOCAB_RULES['samp_store_sol'] = VOCAB_RULES['prepped_samp_store_sol']
+VOCAB_RULES.update({
+    'probeQuencher': [('Black Hole Quencher (BHQ)', r'BHQ|Black Hole'), ('Minor Groove Binder (MGB)', r'MGB|minor groove'),
+                      ('Zero-End Quencher (ZEN)', r'\bZEN\b'), ('TAMRA', r'TAMRA'), ('lowa Black', r'Iowa Black|IBFQ|IABkFQ')],
+    'std_type': [('synthetic double-stranded DNA', r'synthetic|gBlock|gene fragment|oligo'), ('plasmid', r'plasmid'),
+                 ('gDNA', r'genomic|gDNA|tissue DNA'), ('amplicon', r'amplicon|PCR product')],
+    'amp_vis_method': [('dPCR', r'\bdd?PCR\b|digital'), ('qPCR', r'qPCR|real[- ]time|quantitative'), ('gel electrophoresis', r'\bgel\b')],
+    'pcr_assay_lod_unit': [('copies/reaction', r'cop\w*\s*(?:#\s*)?/\s*(?:reaction|rxn|well)|cop\w* per (?:reaction|rxn|well)'), ('copies/µL', r'cop\w*\s*/\s*[µu]L|cop\w* per [µu]L')],
+})
+VOCAB_RULES['pcr_assay_loq_unit'] = VOCAB_RULES['pcr_assay_lod_unit']
 
 
 def load_vocab(pkg, paths, ss) -> dict:
@@ -2091,7 +2479,8 @@ def project_values(meta: dict, version: str) -> dict:
         'recordedBy': meta.get('recorded_by'), 'recordedByID': meta.get('recorded_by_id'),
         'project_contact': meta.get('project_contact'), 'institution': meta.get('institution'),
         'institutionID': meta.get('institution_ror'), 'project_name': title or None, 'project_id': pid or None,
-        'study_factor': meta.get('study_factor'), 'assay_type': meta.get('assay_type') or 'metabarcoding',
+        'study_factor': meta.get('study_factor'),
+        'assay_type': meta.get('assay_type') or ' | '.join(sorted({a.get('assay_type') or 'metabarcoding' for a in meta.get('assays') or []})) or 'metabarcoding',
         'sterilise_method': meta.get('sterilise_method'),
         'neg_cont_0_1': '1' if meta.get('neg_controls') else '0', 'pos_cont_0_1': '1' if meta.get('pos_controls') else '0',
         'checkls_ver': version, 'mod_date': time.strftime('%Y-%m-%d'),
@@ -2129,9 +2518,15 @@ EXTRA_PROJECT_TERMS = ('associated_resource', 'checksum_method', 'thermocycler',
                        'parent_project_id', 'informationWithheld', 'dataGeneralizations')
 
 
+def assay_kind(a: dict, meta: dict) -> str:
+    return a.get('assay_type') or meta.get('assay_type') or 'metabarcoding'
+
+
 def assay_value(a: dict, term: str, meta: dict):
+    kind = assay_kind(a, meta)
+    if term in TARGETED_TERMS and kind != 'targeted': return NA
+    if term in METABARCODING_TERMS and kind == 'targeted': return NA
     if term == 'nucl_acid_amp': return a.get('nucl_acid_amp') or meta.get('nucl_acid_amp')
-    if term in ('probeReporter', 'probeQuencher', 'probe_seq', 'probe_ref', 'probe_conc'): return NA
     return a.get(ASSAY_KEY.get(term, term))
 
 
@@ -2150,8 +2545,12 @@ def fill_project(rows, ss, meta, version):
         req = cell_text(row['cells'].get('A', ''), ss)
         section = cell_text(row['cells'].get('B', ''), ss)
         if not term: continue
-        if section == 'Targeted assay detection':
+        kinds = {assay_kind(a, meta) for a in assays} or {meta.get('assay_type') or 'metabarcoding'}
+        if (section == 'Targeted assay detection' or term in TARGETED_TERMS) and 'targeted' not in kinds:
             set_cell(rows, rn, 'D', NA); continue
+        if term == 'assay_type' and len(kinds) > 1 and len(assays) > 1 and 'assay_type' not in (meta.get('_overrides') or {}).get('project', {}):
+            for i, a in enumerate(assays): set_cell(rows, rn, col_letter(5 + i), assay_kind(a, meta), term=term)
+            filled += 1; continue
         if term in ASSAY_TERMS or term.startswith('probe'):
             aov = (meta.get('_overrides') or {}).get('assay', {})
             vals = [aov.get(str(i), {}).get(term, assay_value(a, term, meta)) for i, a in enumerate(assays)]
@@ -2177,6 +2576,8 @@ def fill_project(rows, ss, meta, version):
             v = meta['_overrides']['project'][term]
         if present(v):
             set_cell(rows, rn, 'D', v, term=term); filled += 1
+        elif kinds == {'targeted'} and section in SEQUENCING_SECTIONS:
+            set_cell(rows, rn, 'D', NA)                  # no sequencing in a qPCR/dPCR-only project
         else:
             m = missing_for(req)
             if m: set_cell(rows, rn, 'D', m)
@@ -2405,9 +2806,11 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     hdr, req = header_map(rows, ss)
     rows = {k: v for k, v in rows.items() if k <= 3}
     marker_of = {a['assay_name']: a['marker'] for a in meta.get('assays') or []}
+    no_run = {a['assay_name'] for a in meta.get('assays') or [] if assay_kind(a, meta) == 'targeted'}   # qPCR/dPCR: no sequencing run
     rn = 4
     for rec, assays, control in samples:
         for an in assays:
+            if an in no_run: continue
             run = {'samp_name': rec['samp_name'], 'assay_name': an, 'lib_id': f'{rec["samp_name"]}_{an}',
                    'seq_run_id': run_for.get(marker_of.get(an)), 'lib_conc_meth': meta.get('lib_conc_meth'),
                    'phix_perc': meta.get('phix_perc')}
@@ -2481,7 +2884,13 @@ SECTIONS = [
              'pcr_primer_name_reverse', 'pcr_primer_forward', 'pcr_primer_reverse', 'pcr_primer_reference_forward',
              'pcr_primer_reference_reverse', 'pcr_primer_vol_forward', 'pcr_primer_vol_reverse', 'pcr_primer_conc_forward',
              'pcr_primer_conc_reverse', 'ampliconSize', 'commercial_mm', 'custom_mm', 'amplificationReactionVolume', 'pcr_dna_vol',
-             'pcr_rep', 'nucl_acid_amp', 'pcr_cond', 'annealingTemp', 'pcr_cycles', 'thermocycler', 'pcr_method_additional']),
+             'pcr_rep', 'nucl_acid_amp', 'pcr_cond', 'annealingTemp', 'pcr_cycles', 'thermocycler', 'pcr_method_additional',
+             'probe_seq', 'probeReporter', 'probeQuencher', 'probe_ref', 'probe_conc']),
+    ('Targeted detection (qPCR/dPCR)', ['amp_vis_method', 'detection_criteria', 'lod_method', 'pcr_assay_lod_techreps', 'pcr_assay_lod',
+                                        'pcr_assay_lod_unit', 'pcr_assay_lod_UL', 'pcr_assay_lod_LL', 'loq_method', 'pcr_assay_loq_techreps',
+                                        'pcr_assay_loq', 'pcr_assay_loq_unit', 'pcr_assay_loq_UL', 'pcr_assay_loq_LL', 'std_type', 'std_source',
+                                        'std_seq', 'thresholdQuantificationCycle', 'baselineValue', 'automaticThresholdQuantificationCycle',
+                                        'automaticBaselineValue', 'targeted_detection_method_additional']),
     ('Library preparation & sequencing', ['barcoding_pcr_appr', 'pcr2_annealingTemp', 'pcr2_cycles', 'pcr2_thermocycler', 'checksum_method', 'pcr2_commercial_mm', 'pcr2_custom_mm', 'pcr2_amplificationReactionVolume',
                                           'pcr2_dna_vol', 'pcr2_cond', 'platform', 'instrument', 'seq_kit', 'lib_layout',
                                           'adapter_forward', 'adapter_reverse', 'lib_screen', 'sequencing_location',
@@ -2568,6 +2977,7 @@ def review_items(meta: dict, text: str = '') -> list:
     for i, a in enumerate(meta.get('assays') or []):
         for term in sorted(ASSAY_TERMS, key=lambda t: [x for _, ts in SECTIONS for x in ts].index(t) if any(t in ts for _, ts in SECTIONS) else 999):
             value = ov.get('assay', {}).get(str(i), {}).get(term, assay_value(a, term, meta))
+            if value == NA and (term in TARGETED_TERMS or term in METABARCODING_TERMS): continue
             items.append({'id': f'assay:{i}:{term}', 'section': _section_of(term), 'term': term, 'scope': 'assay',
                           'assay': a.get('assay_name'), 'marker': a.get('marker'), 'value': '' if value is None else str(value),
                           'generated': term in GENERATED,

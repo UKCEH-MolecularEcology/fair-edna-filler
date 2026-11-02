@@ -349,6 +349,106 @@ check(any('could not read gone.csv' in n for n in m6['notes']) and any('zenodo' 
       and any('not-a-link' in n for n in m6['notes']), 'a broken link becomes a note, the rest still runs')
 O.clear()
 
+# ── 10. targeted (qPCR/dPCR) assays and tables ─────────────────────────────
+print('\n10. Targeted assays, primer/probe tables and recipe lists')
+filler_ = 'Water samples were collected and filtered on site using sterile kits. ' * 40
+T1 = f"""Methods
+{filler_}
+eDNA assay
+The species-specific qPCR assay amplifies an 81 bp fragment of the cytochrome b gene (Table 2).
+Table 2. Primer and probe sequences.
+Oligo Name Sequence (5' - 3')
+ABCF CGTAAACTACGGCTGACTAGTACGAA
+ABCR CCGATGTGTATGTAGATGCAAACA
+ABC.probe FAM-CATCCACGCTAACGGAGCCTCGC-BHQ1
+Metabarcoding PCR
+For 12S metabarcoding the 12S primers (TAGAACAGGCTCCTCTAG and TTAGATACCCCACTATGC) were used and 12S libraries were sequenced on an Illumina MiSeq. The 12S reads were analysed.
+Results
+{filler_}
+References
+Smith, A. 2012. A paper. Journal 1: 1-2.
+Appendix 1
+Species-specific qPCR
+PCRs were set up in a total volume of 25 µL consisting of:
+a. 3 µL of extracted template DNA,
+b. 1 µL of each primer/probe (0.4 µmol/L ABCF; 0.4 µmol/L ABCR; 0.1 µmol/L ABC.probe),
+c. 12.5 µL of TaqMan Environmental Master Mix 2.0,
+d. 6.5 µL ddH2O.
+Each sample was run as 12 replicates on a Bio-Rad CFX96 real-time PCR machine: 10 minutes at 95°C; followed by 50 cycles of 95°C for 15 s and 60°C for 1 minute.
+"""
+m10 = server.prepare(T1)
+ta = [a for a in m10['assays'] if a.get('assay_type') == 'targeted']
+mb = [a for a in m10['assays'] if a.get('assay_type') != 'targeted']
+check(len(ta) == 1 and len(mb) == 1 and mb[0]['marker'] == '12S', 'a qPCR assay and a metabarcoding assay in one report are kept apart')
+a = ta[0] if ta else {}
+check(a.get('target_gene') == 'CytB' and a.get('primer_fwd') == 'CGTAAACTACGGCTGACTAGTACGAA' and a.get('primer_rev') == 'CCGATGTGTATGTAGATGCAAACA',
+      'primers read from a table row with their names; gene from "cytochrome b"')
+check(a.get('probe_seq') == 'CATCCACGCTAACGGAGCCTCGC' and a.get('probeReporter') == 'FAM' and a.get('probeQuencher') == 'BHQ1',
+      'probe sequence, reporter and quencher read from "FAM-…-BHQ1"')
+check((a.get('amplificationReactionVolume'), a.get('pcr_dna_vol'), a.get('pcr_rep'), a.get('pcr_cycles'), a.get('annealingTemp')) == ('25', '3', '12', '50', '60'),
+      'recipe list and cycling read from an appendix after the reference list')
+check(a.get('pcr_primer_conc') == '0.4' and a.get('probe_conc') == '0.1' and 'TaqMan' in (a.get('commercial_mm') or ''),
+      'primer and probe concentrations matched to the oligo names; master mix found')
+check(m10.get('thermocycler', '').startswith('Bio-Rad CFX96'), 'qPCR instrument recorded as thermocycler')
+with tempfile.TemporaryDirectory() as tmp:
+    out = Path(tmp) / 't.xlsx'
+    st = server.fill_workbook(template, m10, 'T1', out)
+    pkg = {n: zipfile.ZipFile(out).read(n) for n in zipfile.ZipFile(out).namelist()}
+    ss = server.shared_strings(pkg); paths = server.sheet_paths(pkg)
+    pr = {row_values(r, ss).get('C'): row_values(r, ss) for r in sheet_rows(pkg, ss, paths, 'projectMetadata').values()}
+    types = {pr['assay_type'].get(c) for c in ('E', 'F')}
+    check(types == {'targeted', 'metabarcoding'}, 'mixed project: assay_type written per assay column')
+    tcol = 'E' if pr['assay_type'].get('E') == 'targeted' else 'F'
+    mcol = 'F' if tcol == 'E' else 'E'
+    check(pr['probe_seq'].get(tcol) == 'CATCCACGCTAACGGAGCCTCGC' and pr['probeQuencher'].get(tcol) == 'Black Hole Quencher (BHQ)'
+          and pr['probe_seq'].get(mcol) == 'not applicable', 'probe terms filled for the qPCR assay, not applicable for metabarcoding (quencher in FAIRe vocabulary)')
+    check(pr['amp_vis_method'].get(tcol) == 'qPCR' and pr['seq_kit'].get(tcol) == 'not applicable', 'targeted detection terms filled; sequencing kit not applicable to the qPCR assay')
+    runs = [row_values(r, ss) for n, r in sheet_rows(pkg, ss, paths, 'experimentRunMetadata').items() if n > 3]
+    check(runs and not any('ABC' in ' '.join(v.values()) for v in runs), 'experimentRunMetadata only lists sequenced (metabarcoding) libraries')
+
+T2 = """Methods
+Each sample was tested with the eAAA1 and eBBB2 assays in eight technical replicates using the QIAcuity Probe PCR kit.
+DNA amplification conditions were 2 min at 95 °C followed by 45 cycles of 15 s at 95 °C and 30 s annealing at 62 °C.
+Table 1
+Target Gene: mt-d-loop | mt-nd5
+LOD (95 % CI): 1 (0.7-1.7) | 0.2 (0.2-0.4)
+Binomial Data (Copy #/rxn): eAAA1 | eBBB2
+eAAA1 (Species one)
+Forward Primer: CGAAGGTATTACATAAAGCA
+Reverse Primer: GAGTGTTTGTGTTAGGTCTTA
+Probe: CCAACAATCATTTATAAGGACTGAGCGAAT
+eBBB2 (Species two)
+Forward Primer: CCAGTAAACAATACAAAACTAC
+Reverse Primer: CCTAGAATTAAATTCAGCTTG
+Probe: TACCCACCATTTCTCCAACATGCTA
+"""
+m11 = server.prepare(T2)
+names = [(a['assay_name'], a.get('target_gene'), a.get('pcr_assay_lod'), a.get('pcr_rep'), a.get('pcr_cycles'), a.get('annealingTemp')) for a in m11['assays']]
+check(names == [('eAAA1', 'D-loop', '1', '8', '45', '62'), ('eBBB2', 'ND5', '0.2', '8', '45', '62')],
+      'several labelled assays: names, genes and LOD from table columns, shared protocol from the methods')
+check(m11.get('assay_type') == 'targeted', 'a qPCR-only study is marked targeted')
+
+T3 = """Methods
+The species-specific qPCR assay targets COI (forward primer: 5'-TTATCGTCACTGCGCACGC-3'; reverse primer: 5'-CGGGGAAAGGCTATGTCAGG-3'; probe 5'-TGGCTCATCCCCCTTATGATTGGGGCC-3').
+Table 1. Species tested with the assay and mismatches to primers and probe
+Species Forward sequence Reverse sequence Probe sequence
+Target species TTATCGTCACTGCGCACGC CCTGACATAGCCTTTCCCCG TGGCTCATCCCCCTTATGATTGGGGCC
+Species b TTATTGTTACTGCCCACGC CCGGACATGGCTTTTCCCCG TGACTCGTGCCCCTTATGATTGGGGCA
+Species c TCATCGTCACAGCGCATGC CCAGACATAGCATTCCCCCG TGACTTGTGCCATTAATAATCGGCGCC
+Species d TTATTGTTACTGCTCACGC CCAGACATAGCATTCCCCCG TGACTTGTACCGCTAATAATTGGAGCC
+"""
+m12 = server.prepare(T3)
+check(len(m12['assays']) == 1 and m12['assays'][0].get('target_gene') == 'COI', 'a specificity table (same primer sites in many species) is not read as extra assays')
+
+T4 = """Methods
+PCR amplification used the 12S primer pair Vert01 (TAGAACAGGCTCCTCTAG and TTAGATACCCCACTATGC, Taberlet 2018) and the 12S libraries were sequenced on an Illumina MiSeq.
+Two samples were also analysed with Tele01 (ACACCGCCCGTCACTCT, CTTCCGGTACTACCATG, Valentini 2016). 12S reads were analysed.
+"""
+m13 = server.prepare(T4)
+pairs = [(a.get('primer_fwd'), a.get('primer_rev')) for a in m13['assays']]
+check(pairs == [('TAGAACAGGCTCCTCTAG', 'TTAGATACCCCACTATGC'), ('ACACCGCCCGTCACTCT', 'CTTCCGGTACTACCATG')], 'two primer pairs for the same marker become two assays')
+check(not any(a.get('assay_type') == 'targeted' for a in server.prepare(text)['assays']), 'the metabarcoding sample report gets no targeted assay')
+
 # ── 9. the browser page, Colab and the Python version offer the same options ──
 import inspect
 shell = (ROOT / 'standalone' / 'shell.html').read_text(encoding='utf-8')
