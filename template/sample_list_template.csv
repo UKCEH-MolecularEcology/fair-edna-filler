@@ -1,0 +1,5 @@
+sample,site,date,latitude,longitude,depth (m),volume filtered (ml),sample type,seq_run_id,pcr_plate_id,filename,filename2,notes
+LAKE1_001,Lake One,2025-11-07,54.4012,-2.9573,0.5,850,sample,RUN01,PLATE1,LAKE1_001_R1.fastq.gz,LAKE1_001_R2.fastq.gz,
+LAKE1_FB1,Lake One,2025-11-07,,,,1000,field blank,RUN01,PLATE1,LAKE1_FB1_R1.fastq.gz,LAKE1_FB1_R2.fastq.gz,
+EXT_BLANK_1,,,,,,,extraction blank,RUN01,PLATE1,EXT_BLANK_1_R1.fastq.gz,EXT_BLANK_1_R2.fastq.gz,
+PCR_NTC_1,,,,,,,PCR negative,RUN01,PLATE1,PCR_NTC_1_R1.fastq.gz,PCR_NTC_1_R2.fastq.gz,

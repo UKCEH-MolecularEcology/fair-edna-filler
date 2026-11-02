@@ -245,6 +245,25 @@ check(fm.get('project_title') == 'GCN sample analysis via single species assay a
 check(fm.get('recorded_by') == 'Helen C. Rees | Steven D. Kane' and fm.get('institution') == 'RSK ADAS Ltd',
       'authors and contractor read from the report details page')
 
+# ── 7. sampling design described in words, and a user sample list ─────────
+design = """Methods
+Water samples were collected to target autumn spawners (7th November to 5th December 2025) and spring spawners (28th January to 3rd March 2026).
+Potential autumn spawning sites covered 1) the west shore (NBASW, N=9), 2) North Point (NTH, N=3 and NTHS, N=1). Each of these sites was sampled five times within the autumn sampling period, with the exception of “NTHS” which was sampled nine times. Sites targeted for spring spawners were Holbeck Point (HOLP, N=4). Each of these sites was sampled five times during the spring spawning period. Seven samples were collected at each of the two additional lakes: Rydal Water (1st December 2025), Goat’s Water (5th February 2026). A single field blank was carried into the field on each day of sampling. The additional lakes (RYDA and GOAT) were sampled from the shore.
+""" + "PCR and sequencing details. " * 80
+plan = server.sample_plan(design, server.norm(design))
+by = {g['code']: g for g in plan}
+check(sorted(by) == ['GOAT', 'HOLP', 'NBASW', 'NTH', 'NTHS', 'RYDA'], 'sites read from "(CODE, N=x)" and "N samples at each of the lakes"')
+check(by['NBASW']['points'] * by['NBASW']['visits'] == 45 and by['NTHS']['visits'] == 9 and by['HOLP']['date'] == '2026-01-28/2026-03-03'
+      and by['GOAT']['date'] == '2026-02-05', 'points × visits, exceptions and campaign dates')
+with tempfile.TemporaryDirectory() as tmp:
+    sl = Path(tmp) / 'samples.csv'
+    sl.write_text('sample,site,date,latitude,longitude\nA1,Lake A,07/11/2025,54.1,-2.9\nA_FB,Lake A,07/11/2025,,\nEXT_BLANK_1,,,,\n', encoding='utf-8')
+    m4 = server.prepare(text, samples=sl)
+    rows4 = {rec['samp_name']: (rec, ctl) for rec, _, ctl in server.build_samples(m4)}
+check(set(rows4) == {'A1', 'A_FB', 'EXT_BLANK_1'} and rows4['A1'][0]['eventDate'] == '2025-11-07'
+      and rows4['A_FB'][0]['neg_cont_type'] == 'field negative' and rows4['EXT_BLANK_1'][0]['neg_cont_type'] == 'extraction negative'
+      and rows4['A1'][0]['decimalLatitude'] == '54.1', 'a sample list gives one row per sample, with dates, coordinates and blanks')
+
 print()
 if failures:
     print(f'{len(failures)} check(s) failed.')

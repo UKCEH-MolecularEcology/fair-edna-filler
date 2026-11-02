@@ -545,11 +545,83 @@ def methods_text(text: str):
     return best
 
 
+SEASONS = r'(autumn|spring|summer|winter|wet season|dry season)'
+
+
+def _iso_range(a, b):
+    da, db = parse_date(a), parse_date(b)
+    if da and db and da > db: da = None
+    if not da and db and re.match(r'\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+$', a.strip()):
+        da = parse_date(a + ' ' + db[:4])
+    return f'{da}/{db}' if da and db else (db or da)
+
+
+def sample_plan(text: str, flat: str) -> list:
+    """Sampling groups described in words, e.g. 'Troutbeck Fan (TFAN, N=4) ... each site was sampled five times'
+    or 'Seven samples were collected at each of the four additional lakes: Rydal Water (1st December 2025), …'.
+    Returns [{code, name, points, visits, date, campaign, evidence}]."""
+    groups, sents_ = [], sentences(text)
+    seasons = {}
+    for m in re.finditer(SEASONS + r'[^().]{0,100}?\(\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)\s+(?:to|-|–|until)\s+'
+                         r'(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})', flat, re.I):
+        seasons.setdefault(m.group(1).lower(), _iso_range(m.group(2), m.group(3)))
+    lines = [norm(l) for l in text.split('\n')]
+    def name_for(code, fallback):
+        for i, l in enumerate(lines):
+            if l == code and i >= 2:
+                prev = [x for x in lines[max(0, i - 3):i] if x]
+                cand = [x for x in prev if len(x) > 6 and not re.fullmatch(r'(?:North|South|East|West)(?: \w+)?', x)]
+                if cand: return cand[-1]
+        return fallback
+    pending, campaign = [], None
+    for sent in sents_:
+        cm = re.search(SEASONS, sent, re.I)
+        found = list(re.finditer(r'(?:\d\)\s*)?([A-Z][^,;()]{2,60}?|[a-z][^,;()]{2,60}?)\s*\(\s*([A-Z][A-Z0-9]{1,7}),\s*[Nn]\s*=\s*(\d+)'
+                                 r'(?:\s+and\s+([A-Z][A-Z0-9]{1,7}),\s*[Nn]\s*=\s*(\d+))?\s*\)', sent))
+        if found:
+            campaign = cm.group(1).lower() if cm else campaign
+            for m in found:
+                for code, n in ((m.group(2), m.group(3)), (m.group(4), m.group(5))):
+                    if not code: continue
+                    fb = re.sub(r'^(?:the|and|including|\d\))\s+', '', norm(m.group(1)), flags=re.I)
+                    g = {'code': code, 'name': name_for(code, fb), 'points': int(n), 'visits': None,
+                         'date': seasons.get(campaign), 'campaign': campaign, 'evidence': sent}
+                    groups.append(g); pending.append(g)
+        vm = re.search(r'sampled\s+(\w+)\s+times', sent, re.I)
+        if vm and pending:
+            k = num_word(vm.group(1))
+            for g in pending: g['visits'] = k
+            for ex in re.finditer(r'exception of\s*[“"‘\']?([A-Z][A-Z0-9]{1,7})[”"’\']?\s*(?:,\s*)?which was sampled\s+(\w+)\s+times', sent, re.I):
+                for g in pending:
+                    if g['code'] == ex.group(1): g['visits'] = num_word(ex.group(2))
+            for g in pending: g['evidence'] = g['evidence'] + ' ' + sent
+            pending = []
+    # "Seven samples were collected at each of the four additional lakes: Rydal Water (1st December 2025), …"
+    for m in re.finditer(r'(\w+)\s+samples\s+were\s+(?:collected|taken)\s+(?:at|from)\s+each\s+of\s+the\s+(?:\w+\s+){0,3}?'
+                         r'(?:lakes|sites|ponds|rivers|locations|tarns|reservoirs)\s*:?\s*([^.]{10,600})', flat, re.I):
+        n = num_word(m.group(1))
+        codes = []
+        for cl in re.finditer(r'\(((?:[A-Z][A-Z0-9]{2,7}\s*(?:,|and)\s*)+[A-Z][A-Z0-9]{2,7})\)', flat):
+            codes += re.findall(r'[A-Z][A-Z0-9]{2,7}', cl.group(1))
+        for it in re.finditer(r'([A-Z][\w’\'\- ]{2,40}?)\s*\(\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})\s*\)', m.group(2)):
+            name = norm(it.group(1))
+            key = re.sub(r'[^a-z]', '', name.lower())
+            code = next((c for c in codes if key.startswith(c.lower()[:4]) and c not in [g['code'] for g in groups]), None) or \
+                   re.sub(r'[^A-Z]', '', name.upper())[:4]
+            groups.append({'code': code, 'name': name, 'points': n, 'visits': 1, 'date': parse_date(it.group(2)),
+                           'campaign': None, 'evidence': norm(m.group(0))[:400]})
+    for g in groups:
+        g['visits'] = g['visits'] or 1
+    return groups if len(groups) >= 2 else []
+
+
 def extract(text: str) -> dict:
     text = text.replace('\u00a0', ' ').replace('\ufeff', '').replace('ﬁ', 'fi').replace('ﬂ', 'fl').replace('ﬀ', 'ff').replace('\u2011', '-')
     text = strip_line_numbers(text)
     text = re.sub('[\ue000-\uf8ff]', '', text)                     # private-use glyphs (bullets)
     text = re.sub(r'(?<=[a-z])-\n(?=[a-z])', '-', text)              # "high-\nfidelity"
+    text = re.sub(r'(?<=\d)\s?(?:o|º|˚)C\b|℃', '°C', text)            # "98oC", "60℃" -> °C
+    text = re.sub(r'(?<=[a-z]) - ?\n?(?=[a-z]{3,})', '', text)          # "tem -\nperature"
     refs = references(text)
     cuts = [m for m in re.finditer(r'\n[ \t]*(?:\d+\.\s*)?(?:References(?: to published material)?|REFERENCES|Literature [Cc]ited|Bibliography)[ \t]*(?:\n|\t)', text)
             if m.start() > 0.3 * len(text)]                 # skip a table of contents
@@ -621,7 +693,10 @@ def extract(text: str) -> dict:
     cite('pos_controls', re.search(r'positive control|mock communit', flat, re.I))
 
     # ── sterilisation ────────────────────────────────────────────────────────
-    st = [s for s in sents if re.search(r'UV[- ]steril|bleach|sterile scalpel|decontaminat|DNA[- ]?away', s, re.I)]
+    st = [s for s in sents if re.search(r'UV[- ]steril|bleach|hypochlorite|Virkon|Clinell|decontaminat|DNA[- ]?away|DNA[- ]?Zap|'
+                                        r'wiped with|sterile gloves|autoclav|steril\w+ (?:with|in|by|using)', s, re.I)
+          and not re.search(r'scalpel|sliced', s, re.I)] or \
+         [s for s in sents if re.search(r'sterile scalpel', s, re.I)]
     meta['sterilise_method'] = ' '.join(st[:2]) or None
     cite('sterilise_method', meta['sterilise_method'])
 
@@ -634,6 +709,9 @@ def extract(text: str) -> dict:
         for _k in ('samples_per_site_round', 'samp_size', 'samp_size_unit', 'samp_collect_method'): cite(_k, sm)
     sub = re.search(r'(\d+)\s*[x×]\s*(\d+)\s*m[lL]\s+subsamples', flat)
     if sub: meta['subsamples'] = f'{sub.group(1)} x {sub.group(2)} mL subsamples'
+    if sub and not sm:
+        meta['samp_size'], meta['samp_size_unit'] = f'{int(sub.group(1)) * float(sub.group(2)):g}', 'mL'
+        cite('samp_size', sub); cite('samp_size_unit', sub)
     where = find(r'collected from the (shoreline|shore|littoral zone|centre|center|deepest point|surface)', flat)
     parts = []
     if sm: parts.append(f'{sm.group(1).capitalize()} {sm.group(2)} {meta["samp_size_unit"]} water samples per site per sampling round')
@@ -751,7 +829,8 @@ def extract(text: str) -> dict:
     sol = re.search(r'containing\s+(?:\d+\s*m[lL]\s+)?(DNA/RNA Shield|ethanol|Longmire\'?s?(?: buffer)?|ATL buffer|RNAlater)\s*(\([^)]+\))?', flat, re.I)
     if sol: meta['prepped_samp_store_sol'] = norm(sol.group(1) + ' ' + (sol.group(2) or ''))
     cite('prepped_samp_store_sol', sol)
-    tmp = re.search(r'(?:stored|frozen) at (-?\d+)\s*°?\s*C', flat, re.I)
+    tmp = next((m for m in re.finditer(r'(?:stored|frozen) at (-?\d+)\s*°?\s*C', flat, re.I)
+                if not re.search(r'PCR products?|amplicons?|libraries|DNA extracts?\b|extracted DNA|eluted', at(m.start()), re.I)), None)
     if tmp: meta['prepped_samp_store_temp'] = tmp.group(1)
     cite('prepped_samp_store_temp', tmp)
 
@@ -954,7 +1033,7 @@ def extract(text: str) -> dict:
         if re.search(r'mergePairs', flat): meta['merge_tool'] = 'DADA2 mergePairs'
         meta['otu_clust_tool'] = 'DADA2 (amplicon sequence variants, no clustering)'
         meta['otu_clust_cutoff'] = '100'
-    ee = re.search(r'maxEE\)?\s*=\s*([\d.]+)(?:\s*,\s*([\d.]+))?', flat)
+    ee = re.search(r'maxEE\)?\s*=\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d+(?:\.\d+)?))?', flat)
     if ee:
         meta['error_rate_type'] = 'expected error rate'
         meta['error_rate_cutoff'] = ee.group(1)
@@ -1010,6 +1089,13 @@ def extract(text: str) -> dict:
                     if mk in assays: assays[mk]['blast_note'] = norm(s)
         else:
             scope = []
+    if len(assays) == 1:
+        mk1 = list(assays)[0]
+        for s in bsents:
+            if re.search(r'database|reference', s, re.I) and not assays[mk1].get('dbs'):
+                found = re.findall(db_re, s) + re.findall(r'\b(Midori2?|MIDORI2?)\b', s)
+                if len(found) > 1:
+                    assays[mk1]['dbs'] = list(dict.fromkeys(found)); cite(f'{mk1}.otu_db', s)
     for mk, a in assays.items():
         dbs = []
         for d in a.pop('dbs', []):
@@ -1120,6 +1206,11 @@ def extract(text: str) -> dict:
         if not re.search(r'µ[lL]|cycles?|°\s*C|[Mm]aster ?[Mm]ix|[Pp]olymerase|PCR', sent): carry = None; continue
         for seg_mk, seg in segments(sent):
             pcr_segments.append((seg_mk, seg, sent))
+    for s in fsents:
+        amp = re.search(r'(\d{2,4})\s*(?:-\s*)?(?:bp|base[- ]pairs?)\s+(?:long\s+)?(?:region|fragment|amplicon|product|section)', s, re.I)
+        named = [m for m in markers_in(s) if m in assays] or ([one_assay] if one_assay else [])
+        if amp and named and re.search(r'amplif|primer|target', s, re.I):
+            for mk in named: put_a(mk, 'ampliconSize', amp.group(1), s)
     for seg_mk, s, sent in pcr_segments:
         named = [seg_mk] if seg_mk else [m for m in markers_in(s) if m in assays]
         if re.search(r'\bqPCR\b|real[- ]time|\bprobe\b|\bC[tq]\b|ddPCR|\bdPCR\b|single[- ]species|TaqMan', s) and not named: carry = None; continue
@@ -1131,7 +1222,9 @@ def extract(text: str) -> dict:
         ann = re.search(r'anneal\w*(?:[^.;°]{0,40}?)(\d{2}(?:\.\d)?)\s*°\s*C', s, re.I) or \
               re.search(r'(\d{2}(?:\.\d)?)\s*°\s*C(?:(?!°)[^.;,]){0,25}\banneal', s, re.I)   # "annealing at 60 °C" before "60 °C (annealing)"
         cyc_only = re.search(r'(\d{2})\s*(?:PCR\s*)?cycles\b', s)
-        pcr_ctx = re.search(r'PCR|reaction|amplif|[Mm]aster ?[Mm]ix|polymerase|primer', s)
+        pcr_ctx = re.search(r'PCR|reaction|amplif|[Mm]aster ?[Mm]ix|polymerase|primer|template', s)
+        disp = re.search(r'(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:was|were|of (?:the )?(?:master ?mix|mix|solution) was)\s+(?:dispensed|aliquoted|added)[^.]{0,90}?'
+                         r'(?:addition of|followed by|with)\s+(\d+(?:\.\d+)?)\s*µ[lL]\s+(?:of\s+)?(?:\w+\s+)?(?:template|DNA)', s, re.I)
         vol = pcr_ctx and (re.search(r'(?:total|final|reaction)\s+volumes?\s+(?:of\s+)?(\d+(?:\.\d+)?)\s*µ[lL]', s, re.I)
                or re.search(r'(\d+(?:\.\d+)?)[ -]?µ[lL]\s+(?:PCR\s+)?reactions?', s, re.I)
                or re.search(r'\((\d+(?:\.\d+)?)\s*µ[lL]\s*(?:per|/)\s*(?:sample|reaction)\)', s, re.I)
@@ -1147,6 +1240,13 @@ def extract(text: str) -> dict:
             elif cyc_only: put_a(mk, 'pcr_cycles', cyc_only.group(1), s, override=specific)
             if ann: put_a(mk, 'annealingTemp', ann.group(1), s, override=specific or bool(cyc))
             if vol and float(vol.group(1)) <= 200: put_a(mk, 'amplificationReactionVolume', vol.group(1), s)
+            if disp: put_a(mk, 'amplificationReactionVolume', f'{float(disp.group(1)) + float(disp.group(2)):g}', s)
+            pv = re.search(r'(\d+(?:\.\d+)?)\s*µ[lL]\s+of\s+(?:each\s+)?(?:the\s+)?(\d+(?:\.\d+)?)\s*[µu]M\s+(?:of\s+)?(?:each\s+)?(?:forward and reverse\s+)?primers?', s, re.I)
+            if pv: put_a(mk, 'pcr_primer_vol', pv.group(1), s); put_a(mk, 'pcr_primer_conc', pv.group(2), s)
+            amp = re.search(r'(\d{2,4})\s*(?:-\s*)?(?:bp|base[- ]pairs?)\s+(?:long\s+)?(?:region|fragment|amplicon|product|section)', s, re.I)
+            if amp: put_a(mk, 'ampliconSize', amp.group(1), s)
+            cond = re.search(r'(?:conditions?|program(?:me)?|profile|cycling)[^:]{0,40}:\s*((?:[^.]*?\d+\s*°C){3,}[^.]*)', s, re.I)
+            if cond: put_a(mk, 'pcr_cond', norm(cond.group(1)), s)
             if dna and pcr_ctx and 'elut' not in s.lower() and float(dna.group(1)) <= 20: put_a(mk, 'pcr_dna_vol', dna.group(1), s)
             if mm: put_a(mk, 'commercial_mm', norm(mm.group(1)), s)
             if rep:
@@ -1172,6 +1272,8 @@ def extract(text: str) -> dict:
         if ctx and ctx[-1].group(1): continue
         if re.search(r'\bFAM\b|BHQ|\bMGB\b|quencher', joined[m.end(): m.end() + 30]): continue
         if 'AATGATACGGCGACCACC' in seq or 'CAAGCAGAAGACGGCATACGA' in seq: continue          # index adapters
+        if NEXTERA_F.startswith(seq) or NEXTERA_R.startswith(seq) or \
+           re.search(r'adaptor|adapter|index|overhang|tag(?:ged)? sequence|barcode', joined[max(0, m.start() - 45): m.start()], re.I): continue
         direction = None
         for ov, d in ((NEXTERA_F, 'fwd'), (NEXTERA_R, 'rev')):
             if seq.startswith(ov): seq, direction = seq[len(ov):], d
@@ -1246,7 +1348,8 @@ def extract(text: str) -> dict:
     idc = re.search(r'(\d{2,3}(?:\.\d+)?)\s*%\s*(?:sequence\s*|query\s*)?(?:identity|similarity|match)', fl, re.I)
     qcv = re.search(r'(\d{2,3})\s*%\s*(?:query\s*)?coverage', fl, re.I)
     mrd = re.search(r'(?:fewer|less) than (\d+) (?:reads|copies|sequences)[^.]{0,80}?(?:removed|excluded|discarded)|(?:removed|excluded|discarded)[^.]{0,60}?(?:fewer|less) than (\d+) (?:reads|copies|sequences)', fl, re.I)
-    if mrd: put('min_reads_cutoff', mrd.group(1) or mrd.group(2), mrd); put('min_reads_cutoff_unit', 'reads', mrd)
+    mrd = mrd or re.search(r'(?:with|had|having)\s*(?:<|fewer than|less than)\s*(\d[\d,]*)\s*(?:total\s+)?reads()', fl, re.I)
+    if mrd: put('min_reads_cutoff', (mrd.group(1) or mrd.group(2)).replace(',', ''), mrd); put('min_reads_cutoff_unit', 'reads', mrd)
     if idc: put('tax_class_id_cutoff', idc.group(1), idc)
     if qcv: put('tax_class_query_cutoff', qcv.group(1), qcv)
     DB = (r'(SILVA|Silva|PR2|MIDORI2?|Midori2?|UNITE|Greengenes2?|RDP|BOLD|GenBank|NCBI(?: nt| nr| GenBank)?|MitoFish|diat\.barcode|CRABS|EMBL)'
@@ -1293,6 +1396,7 @@ def extract(text: str) -> dict:
         put('samp_size', ssz.group(1), ssz); put('samp_size_unit', unit, ssz)
     for s in fsents:
         st = re.search(r'(?:stored|kept|frozen|preserved|transported)\s+(?:at|in)\s+(-?\d+)\s*°\s*C', s, re.I)
+        if st and re.search(r'PCR products?|amplicons?|libraries|DNA extracts?\b|extracted DNA|eluted', s, re.I): continue
         if st:
             put('prepped_samp_store_temp' if re.search(r'filter|extract|tube|cartridge', s, re.I) else 'samp_store_temp', st.group(1), s); break
     sol = re.search(r"(?:in|with|containing|added)\s+(?:\d+\s*m[lL]\s+(?:of\s+)?)?(?:\d+\s*%\s*)?(ethanol|Longmire'?s?(?: (?:buffer|solution))?|ATL buffer|RNAlater|DNA/RNA Shield|lysis buffer|CTAB)", fl, re.I)
@@ -1332,6 +1436,19 @@ def extract(text: str) -> dict:
         yr = (meta.get('end_date') or '')[:4]
         who = meta.get('institution') or ''
         meta['bibliographicCitation'] = f'{who} ({yr}). {meta["project_title"]}. Evidence project final report' + (f' to {meta["funder"]}' if meta.get('funder') else '') + '.'
+    plan = sample_plan(mtext or text, norm(mtext) if mtext else flat)
+    meta['_primer_text'] = fl
+    if plan:
+        meta['sample_plan'] = plan
+        cite('sample_plan', plan[0]['evidence'])
+        n = sum(g['points'] * g['visits'] for g in plan)
+        parts = ', '.join('%s %d×%d' % (g['code'], g['points'], g['visits']) for g in plan)
+        meta['notes'].append(f'Sampling design read from the text: {len(plan)} sites, {n} samples ({parts}). '
+                             'Exact dates per visit and coordinates are not in the report – add them with a sample list.')
+        eb_all = re.findall(r'(\w+) extraction (?:blanks?|negatives?|controls?) were (?:included|processed|extracted)', flat, re.I)
+        if eb_all: meta['extraction_blanks'] = sum(num_word(x) or 0 for x in eb_all)
+        pb = re.search(r'(\w+) PCR (?:blanks?|negatives?|negative controls?) were included', flat, re.I)
+        if pb and not meta.get('pcr_negatives_per_assay'): meta['pcr_negatives_per_assay'] = num_word(pb.group(1)) or 0
     return meta
 
 
@@ -1673,6 +1790,42 @@ def build_samples(meta):
         'concentration_unit': 'ng/µl', 'concentration_method': meta.get('conc_method'),
         'detected_notDetected': NA, 'assay_name': ' | '.join(assays),
     }
+    plan = meta.get('sample_plan') or []
+    if plan:
+        fb_ids_by_campaign = {}
+        if meta.get('field_blanks_per_site_round'):
+            for g in plan:
+                key = g.get('campaign') or g['code']
+                n_fb = max([x['visits'] for x in plan if (x.get('campaign') or x['code']) == key]) if g.get('campaign') else 1
+                fb_ids_by_campaign.setdefault(key, [f'{key.upper().replace(" ", "")}_V{v}_FB' if g.get('campaign') else f'{g["code"]}_FB'
+                                                    for v in range(1, n_fb + 1)])
+        for g in plan:
+            loc = g.get('name')
+            geo = (f'{country}: {region}, {loc}' if region else f'{country}: {loc}') if country and loc else None
+            key = g.get('campaign') or g['code']
+            for v in range(1, g['visits'] + 1):
+                ids = [f'{g["code"]}{p:03d}' + (f'_V{v}' if g['visits'] > 1 else '') for p in range(1, g['points'] + 1)] if g['points'] > 1 \
+                    else [f'{g["code"]}_V{v}' if g['visits'] > 1 else g['code']]
+                fbs = fb_ids_by_campaign.get(key, [])
+                fb = fbs[v - 1] if g.get('campaign') and len(fbs) >= v else (fbs[0] if fbs else None)
+                verb = ' '.join(x for x in [f'{g["campaign"]} survey' if g.get('campaign') else '',
+                                            f'visit {v} of {g["visits"]}' if g['visits'] > 1 else ''] if x) or None
+                for sid in ids:
+                    rec = dict(common, samp_name=sid, samp_category='sample', neg_cont_type=NA_S, pos_cont_type=NA_S,
+                               rel_cont_id=fb, geo_loc_name=geo, eventDate=g.get('date'), verbatimEventDate=verb,
+                               env_medium=meta.get('env_medium'), habitat_natural_artificial_0_1='0' if meta.get('habitat_natural', True) else '1',
+                               samp_collect_method=meta.get('samp_collect_method'), samp_size=meta.get('samp_size'),
+                               samp_size_unit=meta.get('samp_size_unit'), org_note=f'{g["code"]}: {loc}' if loc else None)
+                    out.append((rec, assays, False))
+        for key, fbs in fb_ids_by_campaign.items():
+            dates = [g.get('date') for g in plan if (g.get('campaign') or g['code']) == key]
+            for bid in fbs:
+                rec = dict(common, samp_name=bid, samp_category='negative control', neg_cont_type='field negative',
+                           pos_cont_type=NA_C, rel_cont_id=NA_C, env_broad_scale=NA_C, env_local_scale=NA_C, env_medium=NA_C,
+                           habitat_natural_artificial_0_1=NA_C, materialSampleID=NA_C, eventDate=dates[0] if dates else None,
+                           samp_collect_method='Field blank of purified water collected alongside the samples')
+                out.append((rec, assays, 'field'))
+        sites = []
     for site in sites:
         loc = site.get('name')
         geo = (f'{country}: {region}, {loc}' if region else f'{country}: {loc}') if country and loc else None
@@ -1717,6 +1870,8 @@ def build_samples(meta):
                        nucl_acid_ext=NA_C, nucl_acid_ext_kit=NA_C, nucl_acid_ext_lysis=NA_C, nucl_acid_ext_sep=NA_C,
                        nucl_acid_ext_modify=NA_C, concentration=NA_C, concentration_unit=NA_C, concentration_method=NA_C)
             out.append((rec, [a['assay_name']], 'lab'))
+    if meta.get('sample_list'):
+        out = samples_from_list(meta, common, assays, out)
     sov = (meta.get('_overrides') or {}).get('sample', {})
     if sov:
         for rec, _, control in out:
@@ -1803,11 +1958,12 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     rn = 4
     for rec, assays, control in samples:
         for an in assays:
-            write_record(rows, rn, {
-                'samp_name': rec['samp_name'], 'assay_name': an, 'lib_id': f'{rec["samp_name"]}_{an}',
-                'seq_run_id': run_for.get(marker_of.get(an)), 'lib_conc_meth': meta.get('lib_conc_meth'),
-                'phix_perc': meta.get('phix_perc'),
-            }, hdr, req)
+            run = {'samp_name': rec['samp_name'], 'assay_name': an, 'lib_id': f'{rec["samp_name"]}_{an}',
+                   'seq_run_id': run_for.get(marker_of.get(an)), 'lib_conc_meth': meta.get('lib_conc_meth'),
+                   'phix_perc': meta.get('phix_perc')}
+            run.update({k: v for k, v in (rec.get('_run') or {}).items() if present(v)})
+            if (rec.get('_run') or {}).get('lib_id') and len(assays) > 1: run['lib_id'] = f'{rec["_run"]["lib_id"]}_{an}'
+            write_record(rows, rn, run, hdr, req)
             rn += 1
     n_runs = rn - 4
     validate_rows('experimentRunMetadata', rows, ss, info, issues)
@@ -1972,6 +2128,114 @@ def apply_review(meta: dict, edits: dict) -> dict:
     return meta
 
 
+
+# ── optional sample list (CSV / Excel) with one row per sample ───────────────
+
+SAMPLE_ALIASES = {
+    'samp_name': r'samp_name|sample(?:[ _]?(?:id|name|code|no\.?|number))?|id|name',
+    'eventDate': r'event_?date|date|sampling[ _]date|collection[ _]date|date[ _]collected',
+    'decimalLatitude': r'decimal_?latitude|lat(?:itude)?(?:[ _]?\(?dd\)?)?',
+    'decimalLongitude': r'decimal_?longitude|lon(?:g|gitude)?(?:[ _]?\(?dd\)?)?',
+    'site': r'site(?:[ _]?(?:name|code))?|location|locality|station|lake|river|pond',
+    'samp_category': r'samp_category|category|sample[ _]type|type',
+    'samp_vol_we_dna_ext': r'samp_vol_we_dna_ext|volume[ _]filtered(?:[ _]?\(?ml\)?)?|filtered[ _]volume(?:[ _]?\(?ml\)?)?|vol(?:ume)?(?:[ _]?\(?ml\)?)?',
+    'samp_size': r'samp_size|sample[ _]volume(?:[ _]?\(?ml\)?)?|volume[ _]collected(?:[ _]?\(?ml\)?)?',
+    'depth': r'depth(?:[ _]?\(?m\)?)?',
+    'notes': r'notes?|comments?|remarks?',
+}
+RUN_TERMS = {'pcr_plate_id', 'lib_id', 'seq_run_id', 'lib_conc', 'lib_conc_unit', 'mid_forward', 'mid_reverse', 'filename',
+             'filename2', 'checksum_filename', 'checksum_filename2', 'associatedSequences', 'input_read_count', 'output_read_count'}
+
+
+def read_table(path) -> list:
+    """Rows of a .csv / .tsv / .xlsx file as dicts (header = first row that names the sample column)."""
+    import csv, io
+    path = Path(path)
+    if path.suffix.lower() in ('.xlsx', '.xlsm'):
+        with zipfile.ZipFile(path) as z:
+            pkg = {n: z.read(n) for n in z.namelist()}
+        ss, paths = shared_strings(pkg), sheet_paths(pkg)
+        sheet = paths.get('sampleMetadata') or next(iter(paths.values()))
+        rows = parse_rows(pkg[sheet].decode('utf-8'))
+        table = [[cell_text(r['cells'].get(col_letter(c), ''), ss) for c in range(1, max((col_num(k) for k in r['cells']), default=0) + 1)]
+                 for _, r in sorted(rows.items())]
+    else:
+        raw = path.read_bytes().decode('utf-8-sig', errors='replace')
+        table = list(csv.reader(io.StringIO(raw), dialect=csv.Sniffer().sniff(raw[:4000], delimiters=',;\t')))
+    for i, row in enumerate(table[:10]):
+        if any(re.fullmatch(SAMPLE_ALIASES['samp_name'], str(c).strip(), re.I) for c in row):
+            hdr = [str(c).strip() for c in row]
+            return [dict(zip(hdr, r)) for r in table[i + 1:] if any(str(x).strip() for x in r)]
+    raise ValueError('The sample list needs a column called "sample" or "samp_name" (one row per sample).')
+
+
+def _blank_kind(name, cat):
+    t = re.sub(r'[_\-.]', ' ', f'{name} {cat}'.lower())
+    if not re.search(r'blank|negative|\bneg\b|\bntc\b|control|\bfb\d*\b|\beb\d*\b|\bnc\d*\b', t) or re.search(r'positive|mock', t): return None
+    if re.search(r'\bpcr\b|pcrneg|\bntc\b|no template', t): return 'PCR negative'
+    if re.search(r'extract|\bext\b|\beb\d*\b', t): return 'extraction negative'
+    return 'field negative'
+
+
+def _note(meta, text):
+    if text not in meta.setdefault('notes', []): meta['notes'].append(text)
+
+
+def samples_from_list(meta, common, assays, generated):
+    """One sampleMetadata row per row of the user's sample list, with the report's methods filled in."""
+    terms_known = set(common) | {'samp_name', 'samp_category', 'neg_cont_type', 'pos_cont_type', 'rel_cont_id', 'geo_loc_name',
+                                 'eventDate', 'verbatimEventDate', 'decimalLatitude', 'decimalLongitude', 'env_medium',
+                                 'samp_collect_method', 'samp_size', 'samp_size_unit', 'minimumDepthInMeters', 'maximumDepthInMeters'}
+    hdr_terms = set(meta.get('_sample_headers') or []) | terms_known
+    country, region = meta.get('country'), meta.get('region')
+    out, ignored = [], set()
+    for row in meta['sample_list']:
+        r = {}
+        for k, v in row.items():
+            v = str(v or '').strip(); k0 = str(k or '').strip()
+            if not k0 or not v: continue
+            term = next((t for t in list(hdr_terms) + list(RUN_TERMS) if t.lower() == k0.lower()), None) or \
+                   next((t for t, pat in SAMPLE_ALIASES.items() if re.fullmatch(pat, k0, re.I)), None)
+            if term: r[term] = v
+            else: ignored.add(k0)
+        if not r.get('samp_name'): continue
+        cat = r.pop('samp_category', '')
+        kind = _blank_kind(r['samp_name'], f'{cat} {r.get("notes", "")}')
+        site = r.pop('site', None)
+        rec = dict(common)
+        if kind:
+            rec.update(samp_category='negative control', neg_cont_type=kind, pos_cont_type=NA_C, rel_cont_id=NA_C,
+                       env_broad_scale=NA_C, env_local_scale=NA_C, env_medium=NA_C, habitat_natural_artificial_0_1=NA_C)
+        elif re.search(r'positive|mock', cat, re.I):
+            rec.update(samp_category='positive control', pos_cont_type=cat, neg_cont_type=NA_C)
+        else:
+            rec.update(samp_category='sample', neg_cont_type=NA_S, pos_cont_type=NA_S, env_medium=meta.get('env_medium'),
+                       habitat_natural_artificial_0_1='0' if meta.get('habitat_natural', True) else '1',
+                       samp_collect_method=meta.get('samp_collect_method'), samp_size=meta.get('samp_size'),
+                       samp_size_unit=meta.get('samp_size_unit'))
+        if site:
+            rec['geo_loc_name'] = (f'{country}: {region}, {site}' if region else f'{country}: {site}') if country else site
+        if r.get('depth'): rec['minimumDepthInMeters'] = rec['maximumDepthInMeters'] = r.pop('depth')
+        if r.get('notes'): rec['org_note'] = r.pop('notes')
+        if re.fullmatch(r'\d{5}(?:\.\d+)?', r.get('eventDate', '')):        # Excel date serial number
+            r['eventDate'] = (date(1899, 12, 30) + timedelta(days=int(float(r['eventDate'])))).isoformat()
+        if r.get('eventDate') and not re.match(r'\d{4}-\d{2}', r['eventDate']):
+            d = parse_date(r['eventDate'])                      # day first (UK style) for 07/11/2025
+            if d: r['eventDate'] = d; meta['_dayfirst'] = True
+        elif r.get('eventDate'): r['eventDate'] = r['eventDate'][:10] if re.match(r'\d{4}-\d{2}-\d{2} 00:00', r['eventDate']) else r['eventDate']
+        if r.get('samp_vol_we_dna_ext'): rec['samp_vol_we_dna_ext_unit'] = 'mL'
+        run = {k: r.pop(k) for k in list(r) if k in RUN_TERMS}
+        rec.update(r); rec['_run'] = run
+        an = [a.strip() for a in str(rec.get('assay_name') or '').split('|') if a.strip()]
+        out.append((rec, an or assays, 'field' if kind == 'field negative' else 'lab' if kind else False))
+    if ignored:
+        _note(meta, 'Sample list columns not used (no matching FAIRe term): ' + ', '.join(sorted(ignored)[:15]))
+    if meta.pop('_dayfirst', None):
+        _note(meta, 'Dates in the sample list were read day-first (e.g. 07/11/2025 = 7 November 2025).')
+    _note(meta, f'{len(out)} sample rows taken from your sample list (instead of the {len(generated)} estimated from the report).')
+    return out
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  4. Automatic checks: primer library, validation, confidence, profiles, second opinions
 # ════════════════════════════════════════════════════════════════════════════
@@ -2021,6 +2285,26 @@ PRIMER_LIBRARY = [
     (['trnL-g', 'g', 'trnL g'], 'trnL', 'fwd', 'GGGCAATCCTGAGCCAA', 'https://doi.org/10.1093/nar/gkl938'),
     (['trnL-h', 'h', 'trnL h'], 'trnL', 'rev', 'CCATTGAGTCTCTGCACCTATC', 'https://doi.org/10.1093/nar/gkl938'),
 ]
+# Primer pairs often named only as a set in reports ("12SrRNA V5 primers (Riaz et al., 2011)")
+PRIMER_PAIRS = [
+    (r'12S\s*-?\s*(?:rRNA\s*)?V5|12SV5|Riaz et al', '12S', '12S-V5-F', '12S-V5-R'),
+    (r'MiFish[- ]?U\b|MiFish\s+primers', '12S', 'MiFish-U-F', 'MiFish-U-R'),
+    (r'MiFish[- ]?E\b', '12S', 'MiFish-E-F', 'MiFish-E-R'),
+    (r'Tele0?2\b|teleo\b', '12S', 'teleo_F', 'teleo_R'),
+    (r'Leray\b|mlCOIintF', 'COI', 'mlCOIintF', 'jgHCO2198'),
+    (r'\bfwh\b|fwhF2', 'COI', 'fwhF2', 'fwhR2n'),
+    (r'BF3\s*/\s*BR2', 'COI', 'BF3', 'BR2'),
+    (r'Folmer', 'COI', 'LCO1490', 'HCO2198'),
+    (r'515F[- ]?Y?\s*/\s*926R|Parada et al', '16S', '515F-Y', '926R'),
+    (r'515F\s*/\s*806R', '16S', '515F (Caporaso)', '806R'),
+    (r'341F\s*/\s*785R|Klindworth', '16S', '341F', '785R'),
+    (r'1391f?\s*/\s*EukBr|Amaral-Zettler', '18S', '1391f', 'EukBr'),
+    (r'TAReuk|Stoeck et al', '18S', 'TAReuk454FWD1', 'TAReukREV3'),
+    (r'Diat_rbcL|Vasselon', 'rbcL', 'Diat_rbcL_708F_1', 'R3_1'),
+    (r'trnL\s*\(?g\s*/\s*h|trnL g-h', 'trnL', 'trnL-g', 'trnL-h'),
+    (r'ITS1F\s*/\s*ITS2', 'ITS', 'ITS1F', 'ITS2'),
+    (r'fITS7\s*/\s*ITS4', 'ITS', 'fITS7', 'ITS4'),
+]
 REFERENCE_DBS = [  # (canonical name, pattern)
     ('SILVA', r'\bSILVA\b'), ('PR2', r'\bPR2\b|Protist Ribosomal Reference'), ('MIDORI2', r'MIDORI'),
     ('BOLD', r'\bBOLD\b|Barcode of Life Data'), ('NCBI GenBank', r'\bNCBI\b|GenBank|\bnt database'),
@@ -2066,8 +2350,20 @@ def _flag(meta, item_id, level, reason, origin=None, evidence=None):
 
 def apply_library(meta: dict) -> dict:
     """Cross-check primers against the library; fill names, references and (flagged) sequences."""
+    text = meta.get('_primer_text') or ''
     for i, a in enumerate(meta.get('assays') or []):
         mk = a.get('marker')
+        if text and not any(a.get(k) for k in ('primer_fwd', 'primer_rev', 'primer_name_fwd', 'primer_name_rev')):
+            for pat, pmk, fname, rname in PRIMER_PAIRS:
+                hit = re.search(pat, text, re.I)
+                if pmk == mk and hit:
+                    s0 = max(text.rfind('.', 0, hit.start()) + 1, 0); s1 = text.find('.', hit.end())
+                    src = text[s0: s1 if s1 > 0 else hit.end() + 200].strip()
+                    a['primer_name_fwd'], a['primer_name_rev'] = fname, rname
+                    for nid in (f'assay:{i}:pcr_primer_name_forward', f'assay:{i}:pcr_primer_name_reverse'):
+                        _flag(meta, nid, 'check', 'the report names the primer set, not each primer – names taken from the primer library',
+                              origin='primer library', evidence=src)
+                    break
         for d, word in (('fwd', 'forward'), ('rev', 'reverse')):
             sid, nid, rid = (f'assay:{i}:pcr_primer_{word}', f'assay:{i}:pcr_primer_name_{word}',
                              f'assay:{i}:pcr_primer_reference_{word}')
@@ -2659,7 +2955,7 @@ def _esc(t):
     return html.escape(str(t or ''))
 
 
-def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_confidential=False):
+def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_confidential=False, use_a_sample_list=False):
     """Notebook step: upload a report, read it, and show the review screen with a Fill button."""
     from google.colab import files as colab_files
     from IPython.display import display, HTML
@@ -2679,6 +2975,10 @@ def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_con
     if use_a_profile:
         display(HTML('<div class="fx">Upload your <b>profile</b> (.json):</div>'))
         profile = json.loads(Path(list(colab_files.upload())[0]).read_text(encoding='utf-8'))
+    samples = None
+    if use_a_sample_list:
+        display(HTML('<div class="fx">Upload your <b>sample list</b> (.csv or .xlsx, one row per sample):</div>'))
+        samples = Path(list(colab_files.upload())[0])
     key = ''
     if report_is_not_confidential:
         try:
@@ -2690,7 +2990,7 @@ def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_con
             from getpass import getpass
             key = getpass('Claude API key: ').strip()
     text = extract_report_text(report)
-    meta = prepare(text, profile)
+    meta = prepare(text, profile, None, samples)
     if key:
         try: second_opinion(meta, facts_from_claude(parse_with_claude(text, key), text), 'Claude')
         except Exception as e: meta['notes'].append(f'Claude could not be used ({e}).')
@@ -2788,9 +3088,10 @@ def colab_fill(edits=None, save_profile=False, profile_name='my FAIRe profile'):
 REPORT_TYPES = ('.doc', '.docx', '.pdf', '.txt')
 
 
-def prepare(text: str, profile: dict | None = None, local_ai: str | None = None) -> dict:
-    """Built-in reader + primer library + your profile (+ optional local AI second opinion)."""
+def prepare(text: str, profile: dict | None = None, local_ai: str | None = None, samples=None) -> dict:
+    """Built-in reader + primer library + your profile (+ optional local AI second opinion, + optional sample list)."""
     meta = parse_report_regex(text)
+    if samples: meta['sample_list'] = read_table(samples) if isinstance(samples, (str, Path)) else list(samples)
     apply_library(meta)
     if profile: apply_profile(meta, profile)
     if local_ai:
@@ -2827,13 +3128,13 @@ def read_review_csv(path) -> dict:
     return edits
 
 
-def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=None, profile=None, local_ai=None, edits=None) -> dict:
+def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=None, profile=None, local_ai=None, edits=None, samples=None) -> dict:
     """Read one report, fill the template, and write <name>_FAIRe.xlsx plus <name>_review.csv into out_dir.
     The review CSV lists what needs checking first; put corrections in its 'your_value' column and run again with --edits."""
     report_path, out_dir = Path(report_path), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     text = extract_report_text(report_path)
-    meta = prepare(text, profile, local_ai)
+    meta = prepare(text, profile, local_ai, samples)
     if edits:
         apply_review(meta, edits)
         for k in edits: meta.setdefault('_auto', {})[k] = {'level': 'ok', 'reasons': ['your correction'], 'origin': 'user'}
@@ -2858,6 +3159,8 @@ class Handler(BaseHTTPRequestHandler):
             target = (APP_DIR / 'template' / Path(path).name)
             if target.suffix == '.xlsx' and target.is_file():
                 return self._serve(target, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            if target.suffix == '.csv' and target.is_file():
+                return self._serve(target, 'text/csv; charset=utf-8')
         self.send_error(404)
 
     do_HEAD = do_GET
@@ -2884,6 +3187,7 @@ def main(argv=None):
     p.add_argument('-t', '--template', help='FAIRe template to fill (default: the bundled FULL template)')
     p.add_argument('-o', '--out', default=str(OUTPUT_DIR), help='folder for the filled workbooks (default: outputs/)')
     p.add_argument('--profile', help='apply a saved profile of corrections (JSON)')
+    p.add_argument('--samples', help='your sample list (.csv or .xlsx, one row per sample: sample, date, site, latitude, longitude, …)')
     p.add_argument('--edits', help='a review CSV with your corrections in the your_value column (one report only)')
     p.add_argument('--save-profile', metavar='FILE', help='save the corrections from --edits into this profile (JSON)')
     p.add_argument('--profile-name', default=None, help='name stored in a new profile')
@@ -2914,7 +3218,7 @@ def main(argv=None):
         name = re.sub(r'[^A-Za-z0-9._-]+', '_', f.stem).strip('_') or 'report'
         if stems.count(f.stem) > 1: name += '_' + f.suffix.lstrip('.').lower()     # report.doc + report.pdf
         try:
-            s = process_report(f, args.template, args.out, name, profile, args.local_ai, edits)
+            s = process_report(f, args.template, args.out, name, profile, args.local_ai, edits, args.samples)
             r = s['review']
             print(f'✓ {f.name}: {len(s["assays"])} assays, {s["sampleRows"]} sample rows -> {s["output"]}')
             print(f'    {r["ok"]} values accepted automatically · {r["check"]} to check · {r["missing"]} not found '

@@ -25,6 +25,7 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 - **Multi-assay projects** follow the layout of the official FAIRe examples: project-wide values go in `project_level` (column D), and anything that differs between assays (primers, PCR recipe, databases, sequencing kit…) goes in one column per assay (`assay1`, `assay2`, …).
 - **Controlled vocabularies** are read from the template's own `Drop-down values` sheet; values outside the list are written as `other: …`, as FAIRe requires.
 - **Nothing is guessed.** If the report doesn't state something (e.g. primer sequences in a table that is an image, exact coordinates), the cell gets the FAIRe wording `missing: not provided` (or `not applicable: control sample` for lab controls).
+- **Sample rows.** A report rarely lists every sample, so by default the rows are estimated from how sampling is described. For example, "Troutbeck Fan (TFAN, N=4) … each site was sampled five times" gives TFAN001_V1 … TFAN004_V5, plus field, extraction and PCR blanks. For the real list, with dates, coordinates, volumes and run IDs per sample, add an optional **sample list** (`.csv`/`.xlsx`, one row per sample — see [`template/sample_list_template.csv`](template/sample_list_template.csv)). Column names can be plain ("sample", "date", "site", "latitude", "volume filtered (ml)") or any FAIRe sampleMetadata / experimentRunMetadata term. Blanks are recognised from their names or type.
 - **IDs are generated** from the report structure (e.g. `BASS_R1_01`, `BASS_R1_FB`, `EXTBLANK_01`, `PCRNEG_16S_01`, `run_20260219_600cycle`). Replace them with your lab's IDs before publishing.
 - **You only check what needs checking.** Values that come with a clear source sentence and pass the FAIRe checks are accepted automatically. The review table opens on the few flagged ones, each with the reason, the sentence it came from and an edit box. See [Automatic review](#automatic-review).
 - **Before download the workbook is validated** against the template's own field types: numbers, dates, ISO durations, ontology terms, controlled vocabularies, mandatory fields and sample/library ID links. Safe fixes are made automatically, e.g. `25 µL` → `25`, `24 hours` → `PT24H`, `14/07/2025` → `2025-07-14`.
@@ -38,6 +39,7 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 | Input | Description |
 |---|---|
 | **Report file** | `.docx`, `.pdf`, `.doc`, or `.txt` |
+| **Sample list** *(optional)* | `.csv` or `.xlsx`, one row per sample — gives one sampleMetadata row (and one run row per assay) for each sample |
 | **FAIRe template** *(optional)* | The official FAIRe FULL template is built in ([`template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx`](template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx)). Only choose a template to use a different one, e.g. made with FAIRe-ator. |
 | **Claude API key** *(optional, off by default)* | Only for reports that are **not confidential** — see [Privacy](#privacy-and-how-values-are-found) |
 
@@ -81,6 +83,7 @@ The review CSV lists what needs a look first. To correct values without the brow
 ```bash
 python3 server.py report.pdf --edits outputs/report_review.csv --save-profile lab.json   # apply corrections, remember them
 python3 server.py uploads/ --profile lab.json                                            # next reports: corrections re-applied
+python3 server.py report.docx --samples my_samples.xlsx                                  # one row per sample from your list
 python3 server.py report.pdf --local-ai                                                  # + second opinion from a local model
 ```
 

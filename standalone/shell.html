@@ -227,6 +227,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 
       <label class="profile-row">Your profile <span style="font-weight:400">(optional – corrections saved from earlier reports)</span>
         <input id="prof" type="file" accept=".json"/></label>
+      <label class="profile-row">Sample list <span style="font-weight:400">(optional – one row per sample with its date, site and coordinates;
+        <a href="template/sample_list_template.csv" target="_blank" rel="noopener">example</a>). Without it, sample rows are estimated from the report.</span>
+        <input id="smp" type="file" accept=".csv,.tsv,.xlsx"/></label>
 
       <!-- Optional: Claude (only for non-confidential reports) -->
       <details class="claude-opt" id="claudeBox">
@@ -472,8 +475,13 @@ $('readBtn').addEventListener('click', async () => {
       catch (e) { throw new Error('The profile file could not be read (it should be a .json file saved by this tool).'); }
     }
     py.globals.set('profile_json', profile ? JSON.stringify(profile) : 'null');
-    py.runPython("text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json))");
-    method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '');
+    let smpPath = 'None';
+    if ($('smp').files[0]) {
+      const sf = $('smp').files[0], sext = sf.name.split('.').pop().toLowerCase();
+      py.FS.writeFile('/faire/samples.' + sext, await readBytes(sf)); smpPath = `'/faire/samples.${sext}'`;
+    }
+    py.runPython(`text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json), None, ${smpPath})`);
+    method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '') + ($('smp').files[0] ? ' + your sample list' : '');
     const key = $('apiKey').value.trim();
     if (key && $('claudeConsent').checked) {
       try {
