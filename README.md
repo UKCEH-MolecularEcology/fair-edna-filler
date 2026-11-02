@@ -1,5 +1,7 @@
 # FAIRe Metadata Filler
 
+[![DOI](https://zenodo.org/badge/1255849714.svg)](https://doi.org/10.5281/zenodo.23896995)
+
 **Automatically fill the [FAIRe eDNA metadata template](https://fair-edna.github.io/download.html) from a project report.**
 
 **[▶ Open the tool in your browser](https://ukceh-molecularecology.github.io/fair-edna-filler/)** · [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
@@ -234,17 +236,17 @@ The tool decides for each value whether it can be **accepted automatically** or 
 
 ### How well does it work?
 
-`bench/run_benchmark.py` runs the tool on a folder of reports and compares the result with the published FAIRe example workbooks for the same studies (every published example whose source document is public: seven answer keys for six documents, three of them targeted assays). 197 values could be checked:
+`bench/run_benchmark.py` runs the tool on a folder of reports and compares the result with the published FAIRe example workbooks for the same studies (every published example whose source document is public: eight answer keys for seven documents, four of them targeted assays). 223 values could be checked:
 
 | | v1.0 | v1.1 |
 |---|---|---|
-| Right | 85 (43%) | 119 (60%) |
-| Different from the published workbook | 26 | 24 |
-| Not found | 86 | 54 |
-| Accepted automatically: right / different | 62 / 18 | 81 / 20 |
-| Flagged for a look: right / different | 23 / 8 | 38 / 4 |
+| Right | 88 (39%) | 133 (60%) |
+| Different from the published workbook | 28 | 30 |
+| Not found | 107 | 60 |
+| Accepted automatically: right / different | 65 / 20 | 89 / 24 |
+| Flagged for a look: right / different | 23 / 8 | 44 / 6 |
 
-v1.1 added reading of primer/probe tables, recipe lists, appendices and targeted assays; the gain comes almost entirely from the three targeted examples (13 → 41 right). Many remaining differences are naming (e.g. "Qiagen DNeasy Blood & Tissue kit" vs "Qiagen Blood & Tissue Kit"); some are values where the published workbook and the paper disagree. Values not found are mostly things a report doesn't state in words, or values in tables that are images.
+v1.1 added reading of primer/probe tables, recipe lists, appendices and targeted assays; the gain comes almost entirely from the targeted examples: 13 → 41 right on the three that informed the changes, and 3 → 14 of 26 on Lopez et al. (2024), which was added only after v1.1 was finished. Many remaining differences are naming (e.g. "Qiagen DNeasy Blood & Tissue kit" vs "Qiagen Blood & Tissue Kit"); some are values where the published workbook and the paper disagree. Values not found are mostly things a report doesn't state in words, or values in tables that are images.
 
 So expect to look at roughly 5–20 flagged values per report, plus the mandatory fields the report doesn't state.
 
@@ -320,8 +322,12 @@ What keeps them in step:
 
 ## Changelog
 
-- **v1.1** – Reads tables (primer/probe rows and columns, labelled blocks, recipe lists, appendices after the references); targeted qPCR/dPCR assays with probes, LOD/LOQ and per-assay `assay_type`; several primer pairs per marker; specificity tables recognised. Benchmark 43% → 60% right.
+- **v1.1** – Reads tables (primer/probe rows and columns, labelled blocks, recipe lists, appendices after the references); targeted qPCR/dPCR assays with probes, LOD/LOQ and per-assay `assay_type`; several primer pairs per marker; specificity tables recognised. Benchmark 39% → 60% right.
 - **v1.0** – First release: browser, Colab and Python; review step; validation; profiles; extra sources (protocols.io, Zenodo, GitHub, ENA/SRA).
+
+## How to cite
+
+Please cite the archived release: FAIRe Metadata Filler, https://doi.org/10.5281/zenodo.23896995
 
 ## Licence
 
