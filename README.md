@@ -39,7 +39,7 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 | Input | Description |
 |---|---|
 | **Report file** | `.docx`, `.pdf`, `.doc`, or `.txt` |
-| **Links** *(optional)* | protocols.io, Zenodo/Dryad/Figshare, GitHub, BioProject – see [More sources](#more-sources-than-the-report) |
+| **Links / extra files** *(optional)* | Protocol, dataset archive, GitHub, BioProject, or your own tables and scripts – read automatically from the report or added by you. See [More sources](#more-sources-than-the-report) |
 | **Sample list** *(optional)* | `.csv` or `.xlsx`, one row per sample — gives one sampleMetadata row (and one run row per assay) for each sample |
 | **FAIRe template** *(optional)* | The official FAIRe FULL template is built in ([`template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx`](template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx)). Only choose a template to use a different one, e.g. made with FAIRe-ator. |
 | **Claude API key** *(optional, off by default)* | Only for reports that are **not confidential** — see [Privacy](#privacy-and-how-values-are-found) |
@@ -64,7 +64,7 @@ Then choose your report (and, optionally, a saved profile), click **Read report*
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/UKCEH-MolecularEcology/fair-edna-filler/blob/main/FAIRe_Metadata_Filler.ipynb)
 
-Open the notebook and click ▶ on its two cells: **① Set up**, then **② Fill from my report**. Upload your report, check the flagged values in the review screen (no code to edit), and click **Fill workbook and download**. The official FAIRe FULL template is fetched automatically; tick a box to use your own template or a saved profile. Needs a Google account.
+Open the notebook and click ▶ on its two cells: **① Set up**, then **② Fill from my report**. Upload your report, check the flagged values in the review screen (no code to edit), and click **Fill workbook and download**. The official FAIRe FULL template is fetched automatically; tick a box to use your own template or a saved profile. To add the study's protocol, dataset, GitHub or BioProject, tick **read_links_in_the_report** or paste links into **extra_sources** (see [More sources](#more-sources-than-the-report)). Needs a Google account.
 
 ### 3. Python (for coders)
 
@@ -78,6 +78,8 @@ python3 server.py report.pdf           # fill from one report      -> outputs/re
 python3 server.py uploads/             # every report in a folder  -> outputs/
 python3 server.py report.doc -t my_template.xlsx -o results/
 ```
+
+To combine the report with its protocol, dataset archive, GitHub repository, BioProject or your own files, add `--follow-links` and/or `--source …`. See [More sources than the report](#more-sources-than-the-report).
 
 The review CSV lists what needs a look first. To correct values without the browser, type your value into its `your_value` column (`-` empties a value), then run:
 
@@ -115,32 +117,87 @@ print(summary["notes"])                # things to check by hand
 
 ## More sources than the report
 
-A paper or report rarely holds everything FAIRe asks for. The detail is usually spread across a protocol, a dataset archive, a code repository and a sequence archive. Give the tool those links, or let it follow the ones printed in the report, and it combines them:
+A report or paper rarely contains everything FAIRe asks for. The details are usually spread over:
 
-| Source | What it adds |
+- a **protocol** (e.g. on protocols.io),
+- a **dataset archive** (Zenodo, Dryad, Figshare),
+- a **code/data repository** (GitHub),
+- a **sequence archive** (SRA/ENA BioProject),
+- and your own **files** (sample sheets, read tables, scripts).
+
+The tool can read all of these and combine them with the report. There are two ways to tell it where to look, and you can use both together.
+
+### Option A – let it follow the links printed in the report
+
+Most papers have a *Data availability* section with links. Switch on **follow links** and the tool finds them and reads each one.
+
+- **Colab:** in step ②, tick **read_links_in_the_report**.
+- **Python:**
+  ```bash
+  python3 server.py paper.pdf --follow-links
+  ```
+
+It recognises these links, even when the PDF has broken them up with spaces (e.g. `https:// doi. org/ 10. 5281/ zenodo. 123`):
+
+| In the report | Read as |
 |---|---|
-| **protocols.io** link/DOI, or a protocol PDF | Full PCR recipes and cycling (including the indexing PCR), thermocycler, sterilisation, bioinformatics settings (trimming, merging, length filter, denoising, chimera check, taxonomy thresholds, contamination thresholds); the protocol DOI goes into `nucl_acid_ext` / `nucl_acid_amp` / `sop_bioinformatics` |
-| **Zenodo / Dryad / Figshare** DOI | Authors with ORCIDs, licence, the data-holding institution and its ROR ID; small data and code files inside the record |
-| **GitHub** repository | `code_repo`; sample tables (one row per sample, with dates, volumes, notes); blank–sample links (`rel_cont_id`); control naming from the README; taxon × sample read tables → `taxaRaw` / `taxaFinal` and read counts per sample |
-| **BioProject** (PRJNA…, PRJEB…) | Instrument, layout, file names, MD5 checksums and run accessions – per sample when runs are per sample. Pooled libraries can be linked through a `library` column in your sample list |
-| Local files (`.csv`, `.xlsx`, `.R`, `.zip`, protocol `.pdf`) | The same, without going online |
+| `10.17504/protocols.io.…` | protocol |
+| `10.5281/zenodo.…`, `10.5061/dryad.…`, `10.6084/m9.figshare.…` | dataset archive |
+| `github.com/owner/repo` | code/data repository |
+| `PRJNA…`, `PRJEB…`, `PRJDB…`, `SRP…`, `ERP…` | sequence archive |
 
-```bash
-python3 server.py paper.pdf --follow-links                       # read the links printed in the paper
-python3 server.py paper.pdf --source 10.17504/protocols.io.xxxx/v1 --source 10.5281/zenodo.123 \
-                            --source https://github.com/me/repo --source PRJNA123
-```
+A GitHub link that is only mentioned in passing, outside the data-availability text, is recorded as `code_repo` but not downloaded. An example is the bioinformatics pipeline's own repository.
 
-Each value records its source, e.g. "from protocols.io" or "taken from protocols.io; the report says …". Where sources disagree, the more specific one wins and the value is flagged for a look:
-- the protocol wins for methods;
-- the dataset record wins for ORCIDs, licence and institution;
-- data files win for samples.
+### Option B – add sources yourself
 
-Columns in your data files that have no FAIRe term are kept as user-defined columns at the end of `sampleMetadata`.
+Use this for links that are not in the report, or for files on your computer. You can add as many as you like.
 
-**Privacy:** nothing is fetched unless you give a link or tick *follow links*, and only public records are downloaded; the report itself never leaves your computer. Online sources work in Python and Colab; the browser page reads the report only.
+- **Colab:** in step ②, paste them into **extra_sources**, separated by spaces.
+- **Python:** add one `--source` per link or file:
+  ```bash
+  python3 server.py report.docx \
+      --source 10.17504/protocols.io.eq2lyqm8mvx9/v1 \
+      --source 10.5281/zenodo.15723454 \
+      --source https://github.com/clarecowgill/Cowgill-et-al.-2025-Multi-tool-monitoring \
+      --source PRJNA1345715 \
+      --source my_protocol.pdf --source lab_samples.xlsx --source reads_table.csv --source pipeline.R
+  ```
 
-On Cowgill et al. 2026, the paper alone filled 25 of 86 checkable project terms correctly. Adding protocols.io, Zenodo, GitHub and the BioProject raised this to 74, and most of the rest differ only in wording. It also filled one row per sample, linked to its blanks, and filled `taxaRaw`. This was tested offline with captured responses.
+### What each source can add
+
+| Source | Accepted as | What it fills |
+|---|---|---|
+| **Protocol** | protocols.io link or DOI, or a protocol file (`.pdf` or `.docx`; a `.txt` file needs "protocol" in its name) | PCR recipe and cycling (also for the indexing PCR), thermocycler, sterilisation, extraction, library quantification, bioinformatics settings: trimming, merging, length filter, denoising, chimera check, taxonomy and contamination thresholds. The protocol DOI goes into `nucl_acid_ext`, `nucl_acid_amp` and `sop_bioinformatics`. |
+| **Dataset archive** | Zenodo, Dryad or Figshare DOI or link | Authors with ORCIDs, licence, the data-holding institution and its ROR ID, plus the data and code files inside the record (files over 20 MB are skipped) |
+| **Repository** | GitHub link | `code_repo`; sample tables; blank–sample links (`rel_cont_id`); control names explained in the README; taxon × sample read tables → `taxaRaw`, read counts per sample; presence/absence tables → `taxaFinal` |
+| **Sequence archive** | BioProject / study accession | Instrument, read layout, file names, MD5 checksums and run accessions for each sample. If the runs are pooled libraries, add a `library` column to your sample list to link each sample to its run. |
+| **Your files** | `.csv`, `.tsv`, `.xlsx`, `.zip`, `.R`, `.py`, … | The same as above, without going online. The kind of table (sample sheet, read table, blank links, presence/absence) is recognised from its contents. |
+
+### What happens when sources disagree
+
+Every value shows where it came from in the review table and in the review CSV, e.g. *"from protocols.io"* or *"taken from protocols.io; the report says …"*. When two sources differ, the more specific one wins and the value is flagged for you to check:
+
+- **the protocol** wins for methods;
+- **the dataset archive** wins for ORCIDs, licence and institution;
+- **data files and your sample list** win for samples (your own `--samples` list always takes priority);
+- **the report** is used for everything else.
+
+Sample-sheet columns with no FAIRe term (e.g. `habitat`, `water_flow`) are not thrown away. They are added as user-defined columns at the end of `sampleMetadata`.
+
+### If something cannot be read
+
+A broken or unreachable link never stops the run. It is listed in the notes, printed on screen and saved in the review CSV. Common cases:
+
+| Note says | What to do |
+|---|---|
+| *protocols.io did not let the tool download the protocol* | Open the protocol page, choose **⋯ → Download PDF**, and add it with `--source protocol.pdf` |
+| *large files not downloaded* | Normal for raw sequences or media; they are not needed for the metadata |
+| *runs are pooled libraries* | Add a `library` column to your sample list (`--samples`) |
+| *could not read …* (a single file) | The other files are still used; add that file yourself with `--source` if it matters |
+
+**Privacy:** nothing is downloaded unless you add a link or switch on *follow links*. Only public records are fetched, and your report never leaves your computer. Online sources work in **Python and Colab**. The browser page reads the report and your sample list only.
+
+**Example:** on Cowgill et al. (2026), the paper alone gave 25 correct project terms out of 86 checked. With follow links switched on (protocols.io, Zenodo, GitHub and the BioProject), that rose to 74. The run also produced 224 sample rows linked to their blanks, 93 `taxaRaw` and 45 `taxaFinal` taxa.
 
 ## Automatic review
 
