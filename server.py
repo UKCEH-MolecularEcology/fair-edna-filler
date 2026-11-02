@@ -171,7 +171,13 @@ def _extract_docx(path: Path) -> str:
 PDF_NOTES: list = []      # pages that could not be read, reported to the user
 
 
+def _quiet_pdf_logs():
+    import logging
+    for name in ('pypdf', 'pypdf._cmap', 'pypdf.generic', 'pdfminer'): logging.getLogger(name).setLevel(logging.ERROR)
+
+
 def _extract_pdf(path: Path) -> str:
+    _quiet_pdf_logs()
     """Text of a PDF, page by page. Pages too complex to read (e.g. huge vector figures) are skipped."""
     PDF_NOTES.clear()
     try:
@@ -197,7 +203,12 @@ def _extract_pdf(path: Path) -> str:
                 out.append(page.extract_text() or ''); page.close()
             return '\n'.join(out)
     except ImportError:
-        raise ValueError('PDF support needs pypdf: pip install pypdf')
+        tool = shutil.which('pdftotext')                     # poppler, if installed
+        if tool:
+            r = subprocess.run([tool, '-layout', str(path), '-'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            if r.returncode == 0 and r.stdout.strip(): return r.stdout.decode('utf-8', 'replace')
+        raise ValueError('reading PDFs needs the pypdf package. Install it once with:  python3 -m pip install --user pypdf  '
+                         '(or: pip install -r requirements.txt)')
 
 
 def _convert_with_office(path: Path):
@@ -3104,20 +3115,41 @@ MAX_DOWNLOAD = 60 * 1024 * 1024
 
 def fetch(url: str, max_bytes: int = MAX_DOWNLOAD) -> bytes:
     if url in FETCH_OVERRIDES:
-        FETCH_LOG.append(url); return FETCH_OVERRIDES[url]
+        FETCH_LOG.append(url)
+        if isinstance(FETCH_OVERRIDES[url], Exception): raise RuntimeError(f'could not download {url} ({FETCH_OVERRIDES[url]})')
+        return FETCH_OVERRIDES[url]
     import urllib.request
-    req = urllib.request.Request(url, headers={'User-Agent': 'FAIRe-Metadata-Filler (+https://github.com/UKCEH-MolecularEcology/fair-edna-filler)',
-                                               'Accept': '*/*'})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            size = int(r.headers.get('Content-Length') or 0)
-            if size and size > max_bytes: raise RuntimeError(f'{url} is {size / 1e6:.0f} MB – skipped (too large)')
-            data = r.read(max_bytes + 1)
-    except OSError as e:
-        raise RuntimeError(f'could not download {url} ({e})')
+    url_q = quote_url(url)
+    data, last = None, None
+    for ua in ('FAIRe-Metadata-Filler (+https://github.com/UKCEH-MolecularEcology/fair-edna-filler)',
+               'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'):
+        try:
+            req = urllib.request.Request(url_q, headers={'User-Agent': ua, 'Accept': '*/*'})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                size = int(r.headers.get('Content-Length') or 0)
+                if size and size > max_bytes: raise RuntimeError(f'{url} is {size / 1e6:.0f} MB – skipped (too large)')
+                data = r.read(max_bytes + 1)
+            break
+        except RuntimeError:
+            raise
+        except Exception as e:          # HTTP errors, refused connections, odd URLs
+            last = e
+    if data is None:
+        raise RuntimeError(f'could not download {url} ({last})')
     if len(data) > max_bytes: raise RuntimeError(f'{url} is larger than {max_bytes // 1_000_000} MB – skipped')
     FETCH_LOG.append(url)
     return data
+
+
+def quote_url(url: str) -> str:
+    """Make a link safe to request: spaces and other odd characters in paths/queries are percent-encoded, line breaks removed."""
+    import urllib.parse
+    url = re.sub(r'[\x00-\x1f\x7f]', '', str(url).strip())
+    parts = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit(parts._replace(
+        path=urllib.parse.quote(urllib.parse.unquote(parts.path), safe="/:@!$&'()*+,;=-._~"),
+        query=urllib.parse.quote(urllib.parse.unquote(parts.query), safe='=&?/:,;+'),
+        fragment=''))
 
 
 def fetch_json(url):
@@ -3339,19 +3371,23 @@ def protocol_from_url(url: str) -> dict:
     if doi:
         slug = doi.group(0)
     view = url if 'protocols.io/view/' in url else None
-    if not view:   # resolve the DOI to its protocols.io page
-        import urllib.request
-        try:
-            with urllib.request.urlopen(urllib.request.Request('https://doi.org/' + slug, method='HEAD'), timeout=30) as r:
-                view = r.geturl()
-        except Exception:
-            view = None
-        if view is None and ('https://doi.org/' + slug) in FETCH_OVERRIDES:
+    if not view and doi:   # resolve the DOI to its protocols.io page (DOI handle API)
+        if ('https://doi.org/' + slug) in FETCH_OVERRIDES:
             view = FETCH_OVERRIDES['https://doi.org/' + slug].decode()
+        else:
+            try:
+                h = fetch_json('https://doi.org/api/handles/' + slug)
+                view = next((v['data']['value'] for v in h.get('values', []) if v.get('type') == 'URL'), None)
+            except Exception:
+                view = None
     if not view: raise RuntimeError(f'could not resolve {url} to a protocols.io page')
     pdf = re.sub(r'(\?.*)?$', '', view).rstrip('/')
     pdf = pdf if pdf.endswith('.pdf') else pdf + '.pdf'
-    data = fetch(pdf)
+    try:
+        data = fetch(pdf)
+    except RuntimeError as e:
+        raise RuntimeError(f'protocols.io did not let the tool download the protocol ({e}). Download it yourself from {view} '
+                           '(⋯ menu → Download PDF) and add it with --source protocol.pdf')
     text = _pdf_bytes_text(data) if data[:4] == b'%PDF' else data.decode('utf-8', 'replace')
     d = re.search(r'10\.17504/protocols\.io\.[a-z0-9]+(?:/v\d+)?', text)
     return read_protocol_text(text, 'protocols.io', d.group(0) if d else (doi.group(0) if doi else None))
@@ -3414,15 +3450,15 @@ def read_github(url: str) -> dict:
     info = fetch_json(f'https://api.github.com/repos/{owner}/{repo}')
     branch = info.get('default_branch') or 'main'
     tree = fetch_json(f'https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1').get('tree') or []
-    files = {}
+    files, skipped = {}, []
     for t in tree:
         p = t.get('path', '')
         if t.get('type') != 'blob' or (t.get('size') or 0) > 5_000_000: continue
         if p.lower().endswith(DATA_EXT + CODE_EXT) or re.match(r'readme', Path(p).name, re.I):
             try: files[p] = fetch(f'https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{p}')
-            except RuntimeError: pass
+            except Exception as e: skipped.append(f'{p} ({e})')
     return {'_label': f'GitHub {owner}/{repo}', 'code_repo': f'https://github.com/{owner}/{repo}', 'files': files,
-            'license': (info.get('license') or {}).get('name')}
+            'license': (info.get('license') or {}).get('name'), 'skipped': skipped}
 
 
 def read_zenodo(ref: str) -> dict:
@@ -3431,10 +3467,18 @@ def read_zenodo(ref: str) -> dict:
     out = {'_label': f'Zenodo {rid}', 'files': {}}
     try: out.update({k: v for k, v in read_datacite(f'10.5281/zenodo.{rid}').items() if k not in ('_label',)})
     except Exception as e: out['_error'] = str(e)
-    try:
-        entries = fetch_json(f'https://zenodo.org/api/records/{rid}/files').get('entries') or []
-    except Exception as e:
-        entries = []; out['_error'] = str(e)
+    entries = None
+    for attempt in (rid, 'latest'):
+        try:
+            if attempt == 'latest':     # a concept DOI (all versions): ask Zenodo for its latest version
+                hits = fetch_json(f'https://zenodo.org/api/records?q=conceptrecid:{rid}&sort=mostrecent&size=1').get('hits', {}).get('hits', [])
+                if not hits: break
+                rid = str(hits[0].get('id')); out['_label'] = f'Zenodo {rid}'
+            entries = fetch_json(f'https://zenodo.org/api/records/{rid}/files').get('entries') or []
+            out.pop('_error', None); break
+        except Exception as e:
+            out['_error'] = str(e)
+    entries = entries or []
     out['file_list'] = [(e.get('key'), e.get('size'), e.get('checksum')) for e in entries]
     for e in entries:
         key, size = e.get('key') or '', e.get('size') or 0
@@ -3639,11 +3683,29 @@ def apply_files(meta: dict, files: dict, label: str):
             meta.setdefault('_evidence', {})['otu_raw_description'] = f'{label}: {name}'
         notes.append(f'taxaRaw: {len(mx["taxa"])} taxa from {name}' + ('' if any(t['sequence'] for t in mx['taxa']) else ' (no sequences in the file)'))
     if samples:
-        name, rows = max(samples, key=lambda x: len(x[1]))
-        hdr = [h.strip() for h in rows[0]]
-        recs = [dict(zip(hdr, r)) for r in rows[1:]]
         in_matrix = set(meta['_read_matrix']['samples']) if meta.get('_read_matrix') else None
-        sid = next(h for h in hdr if re.fullmatch(SAMPLE_ALIASES['samp_name'], h, re.I))
+        def table_recs(rows):
+            hdr = [h.strip() for h in rows[0]]
+            sid_ = next(h for h in hdr if re.fullmatch(SAMPLE_ALIASES['samp_name'], h, re.I))
+            return sid_, [{k: v for k, v in zip(hdr, r) if k} for r in rows[1:]]
+        def score(item):                 # samples matching the read table, then how much each row tells us
+            sid_, recs_ = table_recs(item[1])
+            hit = [r for r in recs_ if not in_matrix or r.get(sid_, '').strip() in in_matrix]
+            filled = sum(1 for r in hit for k, v in r.items() if k != sid_ and str(v).strip())
+            return (len(hit) > 0, filled)
+        samples.sort(key=score, reverse=True)
+        name = samples[0][0]
+        sid, recs = table_recs(samples[0][1])
+        by_id = {r.get(sid, '').strip(): r for r in recs}
+        for other_name, other_rows in samples[1:]:          # fill gaps from the other sample tables
+            osid, orecs = table_recs(other_rows)
+            for r in orecs:
+                key = r.get(osid, '').strip()
+                if key in by_id:
+                    for k, v in r.items():
+                        if k != osid and str(v).strip() and not str(by_id[key].get(k, '')).strip(): by_id[key][k] = v
+                elif in_matrix and key in in_matrix:
+                    nr = {sid: key}; nr.update({k: v for k, v in r.items() if k != osid}); recs.append(nr); by_id[key] = nr
         if in_matrix:
             keep = [r for r in recs if r.get(sid, '').strip() in in_matrix]
             extra = sorted(in_matrix - {r.get(sid, '').strip() for r in recs})
@@ -3753,6 +3815,10 @@ def add_sources(meta: dict, sources: list, report_text: str = '', follow_links: 
                         meta[k] = proto[k]; meta.setdefault('_evidence', {})[k] = proto['_evidence'].get(k)
             elif kind == 'zenodo':
                 z = read_zenodo(src)
+                if z.get('_error'): meta.setdefault('notes', []).append(f'{z["_label"]}: {z["_error"]}')
+                meta.setdefault('notes', []).append(f'{z["_label"]}: {len(z.get("file_list") or [])} files listed, '
+                                                    f'{len(z.get("files") or {})} data/code files read' +
+                                                    (f'; authors, ORCIDs and licence from the record' if z.get('recorded_by') else ''))
                 apply_dataset_record(meta, z)
                 if z.get('files'): apply_files(meta, z['files'], z['_label'])
                 big = [k for k, s, _ in z.get('file_list', []) if (s or 0) > 20_000_000]
@@ -3766,6 +3832,7 @@ def add_sources(meta: dict, sources: list, report_text: str = '', follow_links: 
                     if src not in (meta.get('code_repo') or ''): meta['code_repo'] = ' | '.join(x for x in (meta.get('code_repo'), src) if x)
                     continue
                 g = read_github(src)
+                if g.get('skipped'): meta.setdefault('notes', []).append(f'{g["_label"]}: could not read ' + '; '.join(g['skipped'][:3]))
                 if g.get('code_repo') and g['code_repo'] not in (meta.get('code_repo') or ''):
                     meta['code_repo'] = ' | '.join(x for x in (meta.get('code_repo'), g['code_repo']) if x)
                 apply_files(meta, g['files'], g['_label'])
@@ -4089,6 +4156,8 @@ def main(argv=None):
     files = []
     for r in args.reports:
         r = Path(r)
+        if not r.exists():
+            print(f'✗ {r}: file not found – check the name (put it in quotes if it has spaces).'); continue
         files += sorted(f for f in r.iterdir() if f.suffix.lower() in REPORT_TYPES) if r.is_dir() else [r]
     if not files: raise SystemExit('No reports found.')
     if args.edits and len(files) > 1: raise SystemExit('--edits works with one report at a time.')

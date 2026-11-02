@@ -278,7 +278,8 @@ O['https://zenodo.org/api/records/111/files'] = json.dumps({'entries': []}).enco
 G = 'https://raw.githubusercontent.com/ann/edna/main/'
 O['https://api.github.com/repos/ann/edna'] = b'{"default_branch": "main"}'
 O['https://api.github.com/repos/ann/edna/git/trees/main?recursive=1'] = json.dumps({'tree': [
-    {'path': p, 'type': 'blob', 'size': 10} for p in ('README.md', 'samples.csv', 'reads.csv', 'blanks.csv')]}).encode()
+    {'path': p, 'type': 'blob', 'size': 10} for p in ('README.md', 'cooc_meta.csv', 'samples.csv', 'reads.csv', 'blanks.csv')]}).encode()
+O[G + 'cooc_meta.csv'] = b',sample,type,habitat\n1,A1,W,B\n2,A2,W,B\n3,CAM1_2023-05-01,Cam,F\n4,CAM1_2023-05-02,Cam,F\n5,CAM1_2023-05-03,Cam,F\n'
 O[G + 'README.md'] = b"Blanks: NEG (PCR negative), 'EB' (e.g. XEB1) are extraction blanks, 'BK' is a field blank."
 O[G + 'samples.csv'] = b'sample,type,site,date,time,volume_filtered,notes\nA1,W,Lake A,07/06/2023,10:15,800,clear\nA2,W,Lake A,07/06/2023,10:30,750,\n'
 O[G + 'reads.csv'] = (b'"",A1,A2,ABK1,AEB1,NEG01,taxonomy\nRana_temporaria,10,0,0,0,0,"d__Eukaryota; p__Chordata; c__Amphibia; o__Anura; f__Ranidae; g__Rana; s__Rana_temporaria"\n'
@@ -326,11 +327,26 @@ check(set(names) == {'A1', 'A2', 'ABK1', 'AEB1', 'NEG01'} and names['ABK1']['neg
       'GitHub: samples from the data table, controls named via the README legend')
 check(names['A1']['rel_cont_id'] == 'ABK1 | AEB1 | NEG01' and names['A1']['eventDate'] == '2023-06-07T10:15' and names['A1']['_extra'].get('sample_type') == 'W',
       'blank links, date + time, unmatched columns kept as user-defined columns')
+check(names['A1']['_extra'].get('habitat') == 'B' and names['A1'].get('samp_vol_we_dna_ext') == '800',
+      'the richest sample table is used, with gaps filled from the other tables')
 check(names['A1']['_run'].get('filename') == 'SRR1_1.fastq.gz' and names['A1']['_run'].get('checksum_filename') == 'aaa'
       and names['A1']['_run'].get('output_read_count') == '510', 'SRA run files and read counts linked to their sample')
 check(s5['taxa'].get('taxaRaw') == 2, 'taxaRaw filled from the read table')
 check(server.find_links('Data on Zenodo (https:// doi. org/ 10. 5281/ zenodo. 15723454) and GitHub (https:// github. com/ ann/ ed na ). BioProject PRJNA1345715.')
       == ['10.5281/zenodo.15723454', 'https://github.com/ann/edna', 'PRJNA1345715'], 'links found in PDF text with broken spacing')
+# broken or awkward links must never stop the run
+check(server.quote_url('https://raw.githubusercontent.com/a/b/main/Reference database/tax map.txt')
+      == 'https://raw.githubusercontent.com/a/b/main/Reference%20database/tax%20map.txt'
+      and server.quote_url('https://x.org/a%20b\n') == 'https://x.org/a%20b', 'links with spaces / line breaks are encoded safely')
+O['https://api.github.com/repos/ann/broken'] = b'{"default_branch": "main"}'
+O['https://api.github.com/repos/ann/broken/git/trees/main?recursive=1'] = json.dumps({'tree': [
+    {'path': 'Reference database/map.txt', 'type': 'blob', 'size': 10}, {'path': 'gone.csv', 'type': 'blob', 'size': 10}]}).encode()
+O['https://raw.githubusercontent.com/ann/broken/main/Reference database/map.txt'] = b'id\ttaxid\nA\t1\n'
+O['https://raw.githubusercontent.com/ann/broken/main/gone.csv'] = OSError('HTTP Error 404: Not Found')
+O['https://api.datacite.org/dois/10.5281/zenodo.404?affiliation=true'] = OSError('HTTP Error 404: Not Found')
+m6 = server.prepare(text, sources=['https://github.com/ann/broken', '10.5281/zenodo.404', 'not-a-link'])
+check(any('could not read gone.csv' in n for n in m6['notes']) and any('zenodo' in n.lower() and '404' in n for n in m6['notes'])
+      and any('not-a-link' in n for n in m6['notes']), 'a broken link becomes a note, the rest still runs')
 O.clear()
 
 print()
