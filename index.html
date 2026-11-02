@@ -90,7 +90,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .btn:disabled{opacity:.55;cursor:not-allowed;transform:none}
 
 /* sidebar */
-.sidebar{display:flex;flex-direction:column;gap:1.1rem}
+.sidebar{display:flex;flex-direction:column;gap:1.1rem;position:sticky;top:1rem;align-self:start;
+  max-height:calc(100vh - 2rem);overflow-y:auto;padding-bottom:.5rem}
+@media(max-width:800px){.sidebar{position:static;max-height:none;overflow:visible}}
 .status-text{font-size:.875rem;color:var(--muted);margin-bottom:.7rem;min-height:2.4em}
 .progress{height:4px;background:var(--air);border-radius:100px;overflow:hidden}
 .progress span{display:block;height:100%;width:0%;border-radius:100px;
@@ -231,6 +233,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         <a href="template/sample_list_template.csv" target="_blank" rel="noopener">example</a>). Without it, sample rows are estimated from the report.</span>
         <input id="smp" type="file" accept=".csv,.tsv,.xlsx"/></label>
 
+      <details class="claude-opt" id="moreBox">
+        <summary>More sources: protocol, dataset, GitHub, BioProject <span class="opt-tag">optional · public links only</span></summary>
+        <label class="consent"><input type="checkbox" id="followLinks"/>
+          Read the links printed in the report (protocols.io, Zenodo/Dryad/Figshare, GitHub, BioProject)</label>
+        <div class="key-row">
+          <input id="extraLinks" type="text" placeholder="…or add links yourself, separated by spaces (e.g. 10.5281/zenodo.123 https://github.com/me/repo PRJNA123)"/>
+        </div>
+        <label class="profile-row">Extra files <span style="font-weight:400">(protocol PDF, sample sheet, read table, scripts, .zip)</span>
+          <input id="extraFiles" type="file" multiple accept=".pdf,.docx,.doc,.txt,.csv,.tsv,.xlsx,.zip,.R,.r,.py,.sh,.md"/></label>
+        <p class="small-note">Only public records are downloaded and combined with the report; the report itself never leaves your computer.
+          Some sites (often protocols.io) block downloads from web pages – if so, download the protocol PDF and add it under <em>Extra files</em>,
+          or use the Python/Colab version.</p>
+      </details>
+
       <!-- Optional: Claude (only for non-confidential reports) -->
       <details class="claude-opt" id="claudeBox">
         <summary>Advanced: let Claude read the report <span class="opt-tag">off · not for confidential reports</span></summary>
@@ -260,7 +276,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
       </div>
       <div id="reviewBody"></div>
       <button class="btn" id="fillBtn">
-        <span>Fill workbook with these values</span>
+        <span>Fill workbook and download</span>
         <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       </button>
     </div>
@@ -286,7 +302,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
       </dl>
       <button class="dl-btn" id="dlBtn">
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download filled workbook
+        Download again
       </button>
       <div id="valBlock" class="hidden" style="margin-top:1rem">
         <div class="card-label" style="margin-bottom:.4rem">FAIRe checks</div>
@@ -749,7 +765,7 @@ FM_LABEL = (r'(?:Authors?(?:\(s\))?|(?:Natural England|Environment Agency.s) Pro
 JUNK_ANY = re.compile(r'Page \d+ of \d+|\[Report title|\bdoi\b|doi\.org|https?://|www\.|©|\b(?:19|20)\d\d\s*[;,]\s*\d+|'
                       r'\b(?:Received|Revised|Accepted|Published|Keywords|Citation)\b\s*:|Commissioned Report|^\d+ of \d+|\d of \d+\s*$|'
                       r'\bet al\.?\s*$|\((?:19|20)\d\d\)\s*\d+\s*:\s*\d+|wileyonlinelibrary|journal/|Open Access|licen[cs]e|^\W*$', re.I)
-JUNK_FULL = re.compile(r'(?:(?:RESEARCH|RESOURCE|ORIGINAL|REVIEW|METHODS?)\s+)?(?:ARTICLE|RESEARCH|PAPER)(?:\s+OPEN ACCESS)?|Article|'
+JUNK_FULL = re.compile(r'(?:(?:RESEARCH|RESOURCE|ORIGINAL|REVIEW|METHODS?)\s*)?(?:ARTICLE|RESEARCH|PAPER)(?:\s+OPEN ACCESS)?|Article|'
                        r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}|'
                        r'Report\s*[–-].*|[A-Z]{2,}[\d/]+\S*|[ivx]+|\d+|(?:Edition|Version)\b.*|Natural England|Environment Agency|'
                        r'Evidence Project Final Report|Project identification', re.I)
@@ -810,7 +826,7 @@ def front_matter(text: str) -> dict:
     """Title, authors, contact e-mail and institution from the first pages of a report or paper."""
     head = text[:12000]
     fm = {}
-    lines = [norm(l) for l in head.split('\n')[:100]]
+    lines = [re.sub(r'^(?:[A-Z] ){3,}[A-Z]\b\s*', '', norm(l)) for l in head.split('\n')[:100]]   # "R E S E A R C H  A R T I C L E"
     block, start, end = [], None, None
     for i, s in enumerate(lines):
         words = len(' '.join(block).split())
@@ -862,13 +878,13 @@ def front_matter(text: str) -> dict:
                 fm['project_contact'] = (norm(nm.group(1)) + f' ({em.group(1)})') if nm else em.group(1)
                 fm['_ev_contact'] = norm(m.group(0))[:200]; break
     if not fm.get('institution'):
-        aff = re.search(r'(?m)^\s*1\s*([A-Z][^\n]{8,200})$', head)
-        org = _org_from(aff.group(1)) if aff else None
+        aff = re.search(r'(?ms)^\s*1\s*([A-Z].{8,300}?)(?=^\s*2\s*[A-Z]|^\s*(?:Correspond|Abstract|Funding|Keywords|Received)|\Z)', head)
+        org = _org_from(norm(aff.group(1))) if aff else None
         if org: fm['institution'], fm['_ev_institution'] = org, norm(aff.group(0))
     return fm
 
 
-HEADING = r'^\s*(?:\d+(?:\.\d+)*\.?\s*|[IVX]+\.\s*)?'
+HEADING = r'^\s*(?:\d+(?:\.\d+)*\.?\s*\|?\s*|[IVX]+\.\s*)?'
 METHODS_H = re.compile(HEADING + r'(?:MATERIALS? (?:AND|&) METHODS?|Materials? (?:and|&) [Mm]ethods?|METHODS?|Methods?|METHODOLOGY|Methodology|Experimental (?:design|procedures))\s*$', re.M)
 END_H = re.compile(HEADING + r'(?:RESULTS?(?: AND DISCUSSION)?|Results?(?: and [Dd]iscussion)?|DISCUSSION|Discussion|CONCLUSIONS?|Conclusions?|REFERENCES|References|ACKNOWLEDGE?MENTS?|Acknowledge?ments?)\s*$', re.M)
 
@@ -977,9 +993,15 @@ def at_sentence(flat, pos):
     return flat[a: b + 1 if b > 0 else pos + 300]
 
 
+def despace_headings(text: str) -> str:
+    """Letter-spaced headings from some PDF readers: 'R E F E R E N C E S' -> 'REFERENCES'."""
+    return re.sub(r'(?m)^((?:[A-Z] ){2,}[A-Z]{1,2})(?= |$)', lambda m: m.group(1).replace(' ', ''), text)
+
+
 def extract(text: str) -> dict:
     text = text.replace('\u00a0', ' ').replace('\ufeff', '').replace('ﬁ', 'fi').replace('ﬂ', 'fl').replace('ﬀ', 'ff').replace('\u2011', '-')
     text = strip_line_numbers(text)
+    text = despace_headings(text)
     text = re.sub('[\ue000-\uf8ff]', '', text)                     # private-use glyphs (bullets)
     text = re.sub(r'(?<=[a-z])-\n(?=[a-z])', '-', text)              # "high-\nfidelity"
     text = re.sub(r'(?<=\d)\s?(?:o|º|˚)C\b|℃', '°C', text)            # "98oC", "60℃" -> °C
@@ -3445,8 +3467,10 @@ def fetch(url: str, max_bytes: int = MAX_DOWNLOAD) -> bytes:
         FETCH_LOG.append(url)
         if isinstance(FETCH_OVERRIDES[url], Exception): raise RuntimeError(f'could not download {url} ({FETCH_OVERRIDES[url]})')
         return FETCH_OVERRIDES[url]
-    import urllib.request
     url_q = quote_url(url)
+    if __import__('sys').platform == 'emscripten':          # in the browser page: synchronous request through the browser
+        return _browser_fetch(url, url_q, max_bytes)
+    import urllib.request
     data, last = None, None
     for ua in ('FAIRe-Metadata-Filler (+https://github.com/UKCEH-MolecularEcology/fair-edna-filler)',
                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'):
@@ -3466,6 +3490,24 @@ def fetch(url: str, max_bytes: int = MAX_DOWNLOAD) -> bytes:
     if len(data) > max_bytes: raise RuntimeError(f'{url} is larger than {max_bytes // 1_000_000} MB – skipped')
     FETCH_LOG.append(url)
     return data
+
+
+def _browser_fetch(url, url_q, max_bytes):
+    try:
+        import js  # type: ignore
+        xhr = js.XMLHttpRequest.new()
+        xhr.open('GET', url_q, False)
+        xhr.overrideMimeType('text/plain; charset=x-user-defined')     # raw bytes
+        xhr.send(None)
+    except Exception as e:
+        raise RuntimeError(f'could not download {url} (the site does not allow downloads from a web page – '
+                           f'use the Python or Colab version, or download the file and add it yourself)')
+    if xhr.status != 200:
+        raise RuntimeError(f'could not download {url} (HTTP {xhr.status})')
+    text = str(xhr.responseText)
+    if len(text) > max_bytes: raise RuntimeError(f'{url} is too large – skipped')
+    FETCH_LOG.append(url)
+    return bytes(ord(c) & 0xFF for c in text)
 
 
 def quote_url(url: str) -> str:
@@ -3515,6 +3557,7 @@ def classify(src: str) -> str:
     s = str(src).strip()
     p = Path(s)
     if p.exists():
+        if re.match(r'(extra_)?readme', p.name, re.I): return 'file:code'
         if p.suffix.lower() in ('.csv', '.tsv', '.txt', '.xlsx') and not re.search(r'protocol', p.name, re.I): return 'file:data'
         if p.suffix.lower() in ('.r', '.py', '.sh', '.smk', '.nf', '.yaml', '.yml'): return 'file:code'
         if p.suffix.lower() == '.zip': return 'file:zip'
@@ -4126,8 +4169,13 @@ def add_sources(meta: dict, sources: list, report_text: str = '', follow_links: 
         todo += [f for f in found if f not in todo]
         if found: meta.setdefault('notes', []).append('Links found in the report: ' + ', '.join(found))
     seen_github = set()
-    for src in todo:
+    local_files = {}
+    order = {'sra': 2}
+    todo = sorted(todo, key=lambda x: order.get(classify(x), 0))       # sequence archives last: they link to samples
+    for i_src, src in enumerate(todo):
         kind = classify(src)
+        if kind == 'sra' and local_files:                               # local data files first, all together
+            apply_files(meta, local_files, 'your files'); local_files = {}
         try:
             if kind in ('protocol', 'file:protocol'):
                 if kind == 'protocol': proto = protocol_from_url(src)
@@ -4166,20 +4214,23 @@ def add_sources(meta: dict, sources: list, report_text: str = '', follow_links: 
             elif kind == 'sra':
                 apply_sra(meta, read_sra(src))
             elif kind == 'file:data':
-                p = Path(src)
+                p = Path(src); nm = re.sub(r'^extra_', '', p.name)
                 if p.suffix.lower() == '.xlsx':
                     rows = read_table(p); hdr = list(rows[0]) if rows else []
                     data = '\n'.join(','.join(f'"{str(r.get(h, ""))}"' for h in hdr) for r in rows)
-                    apply_files(meta, {p.name: (','.join(hdr) + '\n' + data).encode()}, p.name)
-                else: apply_files(meta, {p.name: p.read_bytes()}, p.name)
+                    local_files[re.sub(r'\.xlsx$', '.csv', nm)] = (','.join(hdr) + '\n' + data).encode()
+                else: local_files[nm] = p.read_bytes()
             elif kind == 'file:code':
-                apply_files(meta, {Path(src).name: Path(src).read_bytes()}, Path(src).name)
+                local_files[re.sub(r'^extra_', '', Path(src).name)] = Path(src).read_bytes()
             elif kind == 'file:zip':
-                apply_files(meta, unzip_bytes(Path(src).read_bytes(), Path(src).stem), Path(src).name)
+                local_files.update(unzip_bytes(Path(src).read_bytes(), Path(src).stem))
             else:
                 meta.setdefault('notes', []).append(f'Not sure what "{src}" is – skipped.')
         except Exception as e:
             meta.setdefault('notes', []).append(f'Could not use {src}: {e}')
+    if local_files:
+        try: apply_files(meta, local_files, 'your files')
+        except Exception as e: meta.setdefault('notes', []).append(f'Could not use your files: {e}')
     return meta
 
 
@@ -4670,8 +4721,24 @@ $('readBtn').addEventListener('click', async () => {
       const sf = $('smp').files[0], sext = sf.name.split('.').pop().toLowerCase();
       py.FS.writeFile('/faire/samples.' + sext, await readBytes(sf)); smpPath = `'/faire/samples.${sext}'`;
     }
-    py.runPython(`text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json), None, ${smpPath})`);
-    method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '') + ($('smp').files[0] ? ' + your sample list' : '');
+    const extraSrc = [];
+    for (const f of $('extraFiles').files) {
+      const ext = f.name.split('.').pop().toLowerCase(), safe = f.name.replace(/[^A-Za-z0-9._-]+/g, '_');
+      const buf = await readBytes(f);
+      if (ext === 'pdf') {                      // PDFs (protocols) are turned into text in the browser
+        setStatus(`Reading ${f.name}…`, 40);
+        py.FS.writeFile(`/faire/extra_${safe}-protocol.txt`, await pdfText(buf)); extraSrc.push(`/faire/extra_${safe}-protocol.txt`);
+      } else { py.FS.writeFile('/faire/extra_' + safe, buf); extraSrc.push('/faire/extra_' + safe); }
+    }
+    const links = $('extraLinks').value.split(/[\s,;]+/).filter(Boolean);
+    const follow = $('followLinks').checked;
+    py.globals.set('sources_json', JSON.stringify(extraSrc.concat(links)));
+    py.globals.set('follow_links', follow);
+    if (follow || links.length) setStatus('Reading the report and fetching the linked records (this can take a minute)…', 50);
+    await new Promise(r => setTimeout(r, 50));
+    py.runPython(`text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json), None, ${smpPath}, json.loads(sources_json), follow_links)`);
+    method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '') + ($('smp').files[0] ? ' + your sample list' : '') +
+             ($('followLinks').checked || $('extraLinks').value.trim() || $('extraFiles').files.length ? ' + extra sources' : '');
     const key = $('apiKey').value.trim();
     if (key && $('claudeConsent').checked) {
       try {
@@ -4694,7 +4761,7 @@ $('readBtn').addEventListener('click', async () => {
     $('reviewNotes').classList.toggle('hidden', !notes.length);
     renderReview();
     $('reviewCard').classList.remove('hidden');
-    setStatus(c.check ? `Check the ${c.check} flagged value(s), then click "Fill workbook with these values".` : 'Nothing flagged – click "Fill workbook with these values".', 70);
+    setStatus(c.check ? `Check the ${c.check} flagged value(s), then click "Fill workbook and download".` : 'Nothing flagged – click "Fill workbook and download".', 70);
     $('reviewCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) {
     console.error(e);
@@ -4726,8 +4793,9 @@ $('fillBtn').addEventListener('click', async () => {
     for (const x of v.fixed) { const li = document.createElement('li'); li.textContent = `✓ fixed ${x.sheet} · ${x.term}: ${x.what}` + (x.cells > 1 ? ` (${x.cells} cells)` : ''); vl.appendChild(li); }
     if (!v.problems.length) { const li = document.createElement('li'); li.textContent = '✓ Passes the FAIRe format, vocabulary and ID checks'; vl.prepend(li); }
     $('valBlock').classList.remove('hidden');
-    setStatus('Done – download your workbook.', 100);
     $('resultCard').classList.remove('hidden');
+    downloadOut();
+    setStatus(`Done – ${outName} downloaded. Download it again from the box on the right if needed.`, 100);
   } catch (e) {
     console.error(e);
     setStatus('Error: ' + (e.message || e).toString().split('\n').filter(Boolean).pop(), 100);
@@ -4749,13 +4817,14 @@ $('saveProf').addEventListener('click', async () => {
   setStatus(`Saved ${Object.keys(changed).length} correction(s) to ${name}. Load it next time under "Your profile".`, 100);
 });
 
-$('dlBtn').addEventListener('click', () => {
+function downloadOut() {
   if (!outBytes) return;
   const url = URL.createObjectURL(new Blob([outBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: outName });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
-});
+}
+$('dlBtn').addEventListener('click', downloadOut);
 </script>
 </body>
 </html>

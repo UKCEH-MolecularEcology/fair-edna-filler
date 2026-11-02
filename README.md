@@ -58,7 +58,7 @@ Pick whichever suits you — all three give the same result. Works on **macOS, W
 
 **Offline copy:** green **Code** button → *Download ZIP* → extract → double-click **`index.html`**.
 
-Then choose your report (and, optionally, a saved profile), click **Read report**, look at the values under *Needs a look*, click **Fill workbook with these values**, and download the result — the official FAIRe template is built in. (When opening the downloaded `index.html` directly, also choose the template file from the `template` folder: browsers don't let a local page read neighbouring files.) Everything runs inside your browser — your files are never uploaded anywhere. The first visit downloads the tool's Python engine (about 10 MB), so you need an internet connection once. Works in current Chrome, Edge, Firefox and Safari.
+Then choose your report (and, optionally, a saved profile), click **Read report**, look at the values under *Needs a look*, and click **Fill workbook and download** — the official FAIRe template is built in. To add the study's protocol, dataset, GitHub or BioProject, open **More sources** and tick *Read the links printed in the report*, paste links, or add files (see [More sources](#more-sources-than-the-report)). (When opening the downloaded `index.html` directly, also choose the template file from the `template` folder: browsers don't let a local page read neighbouring files.) Everything runs inside your browser — your files are never uploaded anywhere. The first visit downloads the tool's Python engine (about 10 MB), so you need an internet connection once. Works in current Chrome, Edge, Firefox and Safari.
 
 ### 2. Google Colab
 
@@ -131,6 +131,7 @@ The tool can read all of these and combine them with the report. There are two w
 
 Most papers have a *Data availability* section with links. Switch on **follow links** and the tool finds them and reads each one.
 
+- **Browser page:** open **More sources** and tick *Read the links printed in the report*.
 - **Colab:** in step ②, tick **read_links_in_the_report**.
 - **Python:**
   ```bash
@@ -152,6 +153,7 @@ A GitHub link that is only mentioned in passing, outside the data-availability t
 
 Use this for links that are not in the report, or for files on your computer. You can add as many as you like.
 
+- **Browser page:** in **More sources**, paste links into the box and/or add files under *Extra files* (protocol PDF, sample sheet, read table, scripts, .zip).
 - **Colab:** in step ②, paste them into **extra_sources**, separated by spaces.
 - **Python:** add one `--source` per link or file:
   ```bash
@@ -195,7 +197,7 @@ A broken or unreachable link never stops the run. It is listed in the notes, pri
 | *runs are pooled libraries* | Add a `library` column to your sample list (`--samples`) |
 | *could not read …* (a single file) | The other files are still used; add that file yourself with `--source` if it matters |
 
-**Privacy:** nothing is downloaded unless you add a link or switch on *follow links*. Only public records are fetched, and your report never leaves your computer. Online sources work in **Python and Colab**. The browser page reads the report and your sample list only.
+**Privacy:** nothing is downloaded unless you add a link or switch on *follow links*. Only public records are fetched, and your report never leaves your computer. Online sources work best in **Python and Colab**. The browser page can read them too, but only from sites that allow downloads from web pages: Zenodo, DataCite, GitHub and ENA normally do, while protocols.io often does not. If a site blocks it, download the file yourself (e.g. the protocol PDF) and add it under *Extra files*.
 
 **Example:** on Cowgill et al. (2026), the paper alone gave 25 correct project terms out of 86 checked. With follow links switched on (protocols.io, Zenodo, GitHub and the BioProject), that rose to 74. The run also produced 224 sample rows linked to their blanks, 93 `taxaRaw` and 45 `taxaFinal` taxa.
 

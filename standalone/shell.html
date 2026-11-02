@@ -90,7 +90,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .btn:disabled{opacity:.55;cursor:not-allowed;transform:none}
 
 /* sidebar */
-.sidebar{display:flex;flex-direction:column;gap:1.1rem}
+.sidebar{display:flex;flex-direction:column;gap:1.1rem;position:sticky;top:1rem;align-self:start;
+  max-height:calc(100vh - 2rem);overflow-y:auto;padding-bottom:.5rem}
+@media(max-width:800px){.sidebar{position:static;max-height:none;overflow:visible}}
 .status-text{font-size:.875rem;color:var(--muted);margin-bottom:.7rem;min-height:2.4em}
 .progress{height:4px;background:var(--air);border-radius:100px;overflow:hidden}
 .progress span{display:block;height:100%;width:0%;border-radius:100px;
@@ -231,6 +233,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
         <a href="template/sample_list_template.csv" target="_blank" rel="noopener">example</a>). Without it, sample rows are estimated from the report.</span>
         <input id="smp" type="file" accept=".csv,.tsv,.xlsx"/></label>
 
+      <details class="claude-opt" id="moreBox">
+        <summary>More sources: protocol, dataset, GitHub, BioProject <span class="opt-tag">optional · public links only</span></summary>
+        <label class="consent"><input type="checkbox" id="followLinks"/>
+          Read the links printed in the report (protocols.io, Zenodo/Dryad/Figshare, GitHub, BioProject)</label>
+        <div class="key-row">
+          <input id="extraLinks" type="text" placeholder="…or add links yourself, separated by spaces (e.g. 10.5281/zenodo.123 https://github.com/me/repo PRJNA123)"/>
+        </div>
+        <label class="profile-row">Extra files <span style="font-weight:400">(protocol PDF, sample sheet, read table, scripts, .zip)</span>
+          <input id="extraFiles" type="file" multiple accept=".pdf,.docx,.doc,.txt,.csv,.tsv,.xlsx,.zip,.R,.r,.py,.sh,.md"/></label>
+        <p class="small-note">Only public records are downloaded and combined with the report; the report itself never leaves your computer.
+          Some sites (often protocols.io) block downloads from web pages – if so, download the protocol PDF and add it under <em>Extra files</em>,
+          or use the Python/Colab version.</p>
+      </details>
+
       <!-- Optional: Claude (only for non-confidential reports) -->
       <details class="claude-opt" id="claudeBox">
         <summary>Advanced: let Claude read the report <span class="opt-tag">off · not for confidential reports</span></summary>
@@ -260,7 +276,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
       </div>
       <div id="reviewBody"></div>
       <button class="btn" id="fillBtn">
-        <span>Fill workbook with these values</span>
+        <span>Fill workbook and download</span>
         <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       </button>
     </div>
@@ -286,7 +302,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
       </dl>
       <button class="dl-btn" id="dlBtn">
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Download filled workbook
+        Download again
       </button>
       <div id="valBlock" class="hidden" style="margin-top:1rem">
         <div class="card-label" style="margin-bottom:.4rem">FAIRe checks</div>
@@ -480,8 +496,24 @@ $('readBtn').addEventListener('click', async () => {
       const sf = $('smp').files[0], sext = sf.name.split('.').pop().toLowerCase();
       py.FS.writeFile('/faire/samples.' + sext, await readBytes(sf)); smpPath = `'/faire/samples.${sext}'`;
     }
-    py.runPython(`text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json), None, ${smpPath})`);
-    method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '') + ($('smp').files[0] ? ' + your sample list' : '');
+    const extraSrc = [];
+    for (const f of $('extraFiles').files) {
+      const ext = f.name.split('.').pop().toLowerCase(), safe = f.name.replace(/[^A-Za-z0-9._-]+/g, '_');
+      const buf = await readBytes(f);
+      if (ext === 'pdf') {                      // PDFs (protocols) are turned into text in the browser
+        setStatus(`Reading ${f.name}…`, 40);
+        py.FS.writeFile(`/faire/extra_${safe}-protocol.txt`, await pdfText(buf)); extraSrc.push(`/faire/extra_${safe}-protocol.txt`);
+      } else { py.FS.writeFile('/faire/extra_' + safe, buf); extraSrc.push('/faire/extra_' + safe); }
+    }
+    const links = $('extraLinks').value.split(/[\s,;]+/).filter(Boolean);
+    const follow = $('followLinks').checked;
+    py.globals.set('sources_json', JSON.stringify(extraSrc.concat(links)));
+    py.globals.set('follow_links', follow);
+    if (follow || links.length) setStatus('Reading the report and fetching the linked records (this can take a minute)…', 50);
+    await new Promise(r => setTimeout(r, 50));
+    py.runPython(`text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json), None, ${smpPath}, json.loads(sources_json), follow_links)`);
+    method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '') + ($('smp').files[0] ? ' + your sample list' : '') +
+             ($('followLinks').checked || $('extraLinks').value.trim() || $('extraFiles').files.length ? ' + extra sources' : '');
     const key = $('apiKey').value.trim();
     if (key && $('claudeConsent').checked) {
       try {
@@ -504,7 +536,7 @@ $('readBtn').addEventListener('click', async () => {
     $('reviewNotes').classList.toggle('hidden', !notes.length);
     renderReview();
     $('reviewCard').classList.remove('hidden');
-    setStatus(c.check ? `Check the ${c.check} flagged value(s), then click "Fill workbook with these values".` : 'Nothing flagged – click "Fill workbook with these values".', 70);
+    setStatus(c.check ? `Check the ${c.check} flagged value(s), then click "Fill workbook and download".` : 'Nothing flagged – click "Fill workbook and download".', 70);
     $('reviewCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) {
     console.error(e);
@@ -536,8 +568,9 @@ $('fillBtn').addEventListener('click', async () => {
     for (const x of v.fixed) { const li = document.createElement('li'); li.textContent = `✓ fixed ${x.sheet} · ${x.term}: ${x.what}` + (x.cells > 1 ? ` (${x.cells} cells)` : ''); vl.appendChild(li); }
     if (!v.problems.length) { const li = document.createElement('li'); li.textContent = '✓ Passes the FAIRe format, vocabulary and ID checks'; vl.prepend(li); }
     $('valBlock').classList.remove('hidden');
-    setStatus('Done – download your workbook.', 100);
     $('resultCard').classList.remove('hidden');
+    downloadOut();
+    setStatus(`Done – ${outName} downloaded. Download it again from the box on the right if needed.`, 100);
   } catch (e) {
     console.error(e);
     setStatus('Error: ' + (e.message || e).toString().split('\n').filter(Boolean).pop(), 100);
@@ -559,13 +592,14 @@ $('saveProf').addEventListener('click', async () => {
   setStatus(`Saved ${Object.keys(changed).length} correction(s) to ${name}. Load it next time under "Your profile".`, 100);
 });
 
-$('dlBtn').addEventListener('click', () => {
+function downloadOut() {
   if (!outBytes) return;
   const url = URL.createObjectURL(new Blob([outBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: outName });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
-});
+}
+$('dlBtn').addEventListener('click', downloadOut);
 </script>
 </body>
 </html>

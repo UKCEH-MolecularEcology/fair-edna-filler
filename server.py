@@ -422,7 +422,7 @@ FM_LABEL = (r'(?:Authors?(?:\(s\))?|(?:Natural England|Environment Agency.s) Pro
 JUNK_ANY = re.compile(r'Page \d+ of \d+|\[Report title|\bdoi\b|doi\.org|https?://|www\.|©|\b(?:19|20)\d\d\s*[;,]\s*\d+|'
                       r'\b(?:Received|Revised|Accepted|Published|Keywords|Citation)\b\s*:|Commissioned Report|^\d+ of \d+|\d of \d+\s*$|'
                       r'\bet al\.?\s*$|\((?:19|20)\d\d\)\s*\d+\s*:\s*\d+|wileyonlinelibrary|journal/|Open Access|licen[cs]e|^\W*$', re.I)
-JUNK_FULL = re.compile(r'(?:(?:RESEARCH|RESOURCE|ORIGINAL|REVIEW|METHODS?)\s+)?(?:ARTICLE|RESEARCH|PAPER)(?:\s+OPEN ACCESS)?|Article|'
+JUNK_FULL = re.compile(r'(?:(?:RESEARCH|RESOURCE|ORIGINAL|REVIEW|METHODS?)\s*)?(?:ARTICLE|RESEARCH|PAPER)(?:\s+OPEN ACCESS)?|Article|'
                        r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}|'
                        r'Report\s*[–-].*|[A-Z]{2,}[\d/]+\S*|[ivx]+|\d+|(?:Edition|Version)\b.*|Natural England|Environment Agency|'
                        r'Evidence Project Final Report|Project identification', re.I)
@@ -483,7 +483,7 @@ def front_matter(text: str) -> dict:
     """Title, authors, contact e-mail and institution from the first pages of a report or paper."""
     head = text[:12000]
     fm = {}
-    lines = [norm(l) for l in head.split('\n')[:100]]
+    lines = [re.sub(r'^(?:[A-Z] ){3,}[A-Z]\b\s*', '', norm(l)) for l in head.split('\n')[:100]]   # "R E S E A R C H  A R T I C L E"
     block, start, end = [], None, None
     for i, s in enumerate(lines):
         words = len(' '.join(block).split())
@@ -535,13 +535,13 @@ def front_matter(text: str) -> dict:
                 fm['project_contact'] = (norm(nm.group(1)) + f' ({em.group(1)})') if nm else em.group(1)
                 fm['_ev_contact'] = norm(m.group(0))[:200]; break
     if not fm.get('institution'):
-        aff = re.search(r'(?m)^\s*1\s*([A-Z][^\n]{8,200})$', head)
-        org = _org_from(aff.group(1)) if aff else None
+        aff = re.search(r'(?ms)^\s*1\s*([A-Z].{8,300}?)(?=^\s*2\s*[A-Z]|^\s*(?:Correspond|Abstract|Funding|Keywords|Received)|\Z)', head)
+        org = _org_from(norm(aff.group(1))) if aff else None
         if org: fm['institution'], fm['_ev_institution'] = org, norm(aff.group(0))
     return fm
 
 
-HEADING = r'^\s*(?:\d+(?:\.\d+)*\.?\s*|[IVX]+\.\s*)?'
+HEADING = r'^\s*(?:\d+(?:\.\d+)*\.?\s*\|?\s*|[IVX]+\.\s*)?'
 METHODS_H = re.compile(HEADING + r'(?:MATERIALS? (?:AND|&) METHODS?|Materials? (?:and|&) [Mm]ethods?|METHODS?|Methods?|METHODOLOGY|Methodology|Experimental (?:design|procedures))\s*$', re.M)
 END_H = re.compile(HEADING + r'(?:RESULTS?(?: AND DISCUSSION)?|Results?(?: and [Dd]iscussion)?|DISCUSSION|Discussion|CONCLUSIONS?|Conclusions?|REFERENCES|References|ACKNOWLEDGE?MENTS?|Acknowledge?ments?)\s*$', re.M)
 
@@ -650,9 +650,15 @@ def at_sentence(flat, pos):
     return flat[a: b + 1 if b > 0 else pos + 300]
 
 
+def despace_headings(text: str) -> str:
+    """Letter-spaced headings from some PDF readers: 'R E F E R E N C E S' -> 'REFERENCES'."""
+    return re.sub(r'(?m)^((?:[A-Z] ){2,}[A-Z]{1,2})(?= |$)', lambda m: m.group(1).replace(' ', ''), text)
+
+
 def extract(text: str) -> dict:
     text = text.replace('\u00a0', ' ').replace('\ufeff', '').replace('ﬁ', 'fi').replace('ﬂ', 'fl').replace('ﬀ', 'ff').replace('\u2011', '-')
     text = strip_line_numbers(text)
+    text = despace_headings(text)
     text = re.sub('[\ue000-\uf8ff]', '', text)                     # private-use glyphs (bullets)
     text = re.sub(r'(?<=[a-z])-\n(?=[a-z])', '-', text)              # "high-\nfidelity"
     text = re.sub(r'(?<=\d)\s?(?:o|º|˚)C\b|℃', '°C', text)            # "98oC", "60℃" -> °C
@@ -3118,8 +3124,10 @@ def fetch(url: str, max_bytes: int = MAX_DOWNLOAD) -> bytes:
         FETCH_LOG.append(url)
         if isinstance(FETCH_OVERRIDES[url], Exception): raise RuntimeError(f'could not download {url} ({FETCH_OVERRIDES[url]})')
         return FETCH_OVERRIDES[url]
-    import urllib.request
     url_q = quote_url(url)
+    if __import__('sys').platform == 'emscripten':          # in the browser page: synchronous request through the browser
+        return _browser_fetch(url, url_q, max_bytes)
+    import urllib.request
     data, last = None, None
     for ua in ('FAIRe-Metadata-Filler (+https://github.com/UKCEH-MolecularEcology/fair-edna-filler)',
                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'):
@@ -3139,6 +3147,24 @@ def fetch(url: str, max_bytes: int = MAX_DOWNLOAD) -> bytes:
     if len(data) > max_bytes: raise RuntimeError(f'{url} is larger than {max_bytes // 1_000_000} MB – skipped')
     FETCH_LOG.append(url)
     return data
+
+
+def _browser_fetch(url, url_q, max_bytes):
+    try:
+        import js  # type: ignore
+        xhr = js.XMLHttpRequest.new()
+        xhr.open('GET', url_q, False)
+        xhr.overrideMimeType('text/plain; charset=x-user-defined')     # raw bytes
+        xhr.send(None)
+    except Exception as e:
+        raise RuntimeError(f'could not download {url} (the site does not allow downloads from a web page – '
+                           f'use the Python or Colab version, or download the file and add it yourself)')
+    if xhr.status != 200:
+        raise RuntimeError(f'could not download {url} (HTTP {xhr.status})')
+    text = str(xhr.responseText)
+    if len(text) > max_bytes: raise RuntimeError(f'{url} is too large – skipped')
+    FETCH_LOG.append(url)
+    return bytes(ord(c) & 0xFF for c in text)
 
 
 def quote_url(url: str) -> str:
@@ -3188,6 +3214,7 @@ def classify(src: str) -> str:
     s = str(src).strip()
     p = Path(s)
     if p.exists():
+        if re.match(r'(extra_)?readme', p.name, re.I): return 'file:code'
         if p.suffix.lower() in ('.csv', '.tsv', '.txt', '.xlsx') and not re.search(r'protocol', p.name, re.I): return 'file:data'
         if p.suffix.lower() in ('.r', '.py', '.sh', '.smk', '.nf', '.yaml', '.yml'): return 'file:code'
         if p.suffix.lower() == '.zip': return 'file:zip'
@@ -3799,8 +3826,13 @@ def add_sources(meta: dict, sources: list, report_text: str = '', follow_links: 
         todo += [f for f in found if f not in todo]
         if found: meta.setdefault('notes', []).append('Links found in the report: ' + ', '.join(found))
     seen_github = set()
-    for src in todo:
+    local_files = {}
+    order = {'sra': 2}
+    todo = sorted(todo, key=lambda x: order.get(classify(x), 0))       # sequence archives last: they link to samples
+    for i_src, src in enumerate(todo):
         kind = classify(src)
+        if kind == 'sra' and local_files:                               # local data files first, all together
+            apply_files(meta, local_files, 'your files'); local_files = {}
         try:
             if kind in ('protocol', 'file:protocol'):
                 if kind == 'protocol': proto = protocol_from_url(src)
@@ -3839,20 +3871,23 @@ def add_sources(meta: dict, sources: list, report_text: str = '', follow_links: 
             elif kind == 'sra':
                 apply_sra(meta, read_sra(src))
             elif kind == 'file:data':
-                p = Path(src)
+                p = Path(src); nm = re.sub(r'^extra_', '', p.name)
                 if p.suffix.lower() == '.xlsx':
                     rows = read_table(p); hdr = list(rows[0]) if rows else []
                     data = '\n'.join(','.join(f'"{str(r.get(h, ""))}"' for h in hdr) for r in rows)
-                    apply_files(meta, {p.name: (','.join(hdr) + '\n' + data).encode()}, p.name)
-                else: apply_files(meta, {p.name: p.read_bytes()}, p.name)
+                    local_files[re.sub(r'\.xlsx$', '.csv', nm)] = (','.join(hdr) + '\n' + data).encode()
+                else: local_files[nm] = p.read_bytes()
             elif kind == 'file:code':
-                apply_files(meta, {Path(src).name: Path(src).read_bytes()}, Path(src).name)
+                local_files[re.sub(r'^extra_', '', Path(src).name)] = Path(src).read_bytes()
             elif kind == 'file:zip':
-                apply_files(meta, unzip_bytes(Path(src).read_bytes(), Path(src).stem), Path(src).name)
+                local_files.update(unzip_bytes(Path(src).read_bytes(), Path(src).stem))
             else:
                 meta.setdefault('notes', []).append(f'Not sure what "{src}" is – skipped.')
         except Exception as e:
             meta.setdefault('notes', []).append(f'Could not use {src}: {e}')
+    if local_files:
+        try: apply_files(meta, local_files, 'your files')
+        except Exception as e: meta.setdefault('notes', []).append(f'Could not use your files: {e}')
     return meta
 
 
