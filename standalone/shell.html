@@ -511,7 +511,7 @@ $('readBtn').addEventListener('click', async () => {
     py.globals.set('follow_links', follow);
     if (follow || links.length) setStatus('Reading the report and fetching the linked records (this can take a minute)…', 50);
     await new Promise(r => setTimeout(r, 50));
-    py.runPython(`text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, json.loads(profile_json), None, ${smpPath}, json.loads(sources_json), follow_links)`);
+    py.runPython(`text = faire.extract_report_text(report_path)\nmeta = faire.prepare(text, profile=json.loads(profile_json), local_ai=None, samples=${smpPath}, sources=json.loads(sources_json), follow_links=follow_links)`);
     method = 'Built-in reader (private)' + (profile ? ` + profile "${profile.name || 'profile'}"` : '') + ($('smp').files[0] ? ' + your sample list' : '') +
              ($('followLinks').checked || $('extraLinks').value.trim() || $('extraFiles').files.length ? ' + extra sources' : '');
     const key = $('apiKey').value.trim();

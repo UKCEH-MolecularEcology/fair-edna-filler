@@ -3962,7 +3962,7 @@ def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_con
     srcs = [x for x in re.split(r'[\s,;]+', extra_sources or '') if x]
     if srcs or read_links_in_the_report:
         display(HTML('<div class="fx">Reading the extra sources (public links only)…</div>'))
-    meta = prepare(text, profile, None, samples, srcs, read_links_in_the_report)
+    meta = prepare(text, profile=profile, local_ai=None, samples=samples, sources=srcs, follow_links=read_links_in_the_report)
     if key:
         try: second_opinion(meta, facts_from_claude(parse_with_claude(text, key), text), 'Claude')
         except Exception as e: meta['notes'].append(f'Claude could not be used ({e}).')
@@ -4112,7 +4112,7 @@ def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=Non
     report_path, out_dir = Path(report_path), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     text = extract_report_text(report_path)
-    meta = prepare(text, profile, local_ai, samples, sources, follow_links)
+    meta = prepare(text, profile=profile, local_ai=local_ai, samples=samples, sources=sources, follow_links=follow_links)
     if edits:
         apply_review(meta, edits)
         for k in edits: meta.setdefault('_auto', {})[k] = {'level': 'ok', 'reasons': ['your correction'], 'origin': 'user'}

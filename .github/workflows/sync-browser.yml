@@ -1,0 +1,37 @@
+name: Keep the browser version in step
+
+# The browser page (index.html) runs a copy of server.py. Whenever server.py or the page
+# layout changes, rebuild index.html and commit it, so the online tool, Colab and the
+# Python version always run exactly the same code. GitHub Pages then republishes it.
+on:
+  push:
+    branches: [main]
+    paths: ['server.py', 'standalone/**', 'build_standalone.py', 'static/ukceh_logo.png', 'template/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rebuild index.html from server.py
+        run: python3 build_standalone.py
+      - name: Check everything still works
+        run: python3 tests/test_tool.py
+      - name: Commit the rebuilt page (only if it changed)
+        run: |
+          if git diff --quiet -- index.html; then
+            echo "index.html already up to date"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add index.html
+            git commit -m "Rebuild index.html from server.py"
+            git push
+          fi

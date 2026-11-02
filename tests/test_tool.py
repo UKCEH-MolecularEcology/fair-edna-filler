@@ -349,6 +349,27 @@ check(any('could not read gone.csv' in n for n in m6['notes']) and any('zenodo' 
       and any('not-a-link' in n for n in m6['notes']), 'a broken link becomes a note, the rest still runs')
 O.clear()
 
+# ── 9. the browser page, Colab and the Python version offer the same options ──
+import inspect
+shell = (ROOT / 'standalone' / 'shell.html').read_text(encoding='utf-8')
+colab_src = inspect.getsource(server.colab_read)
+cli_src = inspect.getsource(server.process_report) + inspect.getsource(server.main)
+NOT_EVERYWHERE = {'local_ai': 'needs Ollama on the user\'s own computer – Python only'}
+options = [p for p in inspect.signature(server.prepare).parameters if p != 'text']
+for opt in options:
+    for name, src in (('browser page', shell), ('Colab', colab_src), ('command line', cli_src)):
+        check(re.search(r'\b' + opt + r'\s*=', src) is not None, f'{name} passes "{opt}" to prepare()' +
+              (f' (may be None: {NOT_EVERYWHERE[opt]})' if opt in NOT_EVERYWHERE else ''))
+for step in ('review', 'apply_review', 'fill_workbook', 'profile_from_review'):
+    check(all(re.search(r'\b' + step + r'\(', src) for src in (shell, inspect.getsource(server.colab_fill) + colab_src + inspect.getsource(server._review_screen),
+                                                              cli_src + inspect.getsource(server.main))),
+          f'browser page, Colab and command line all use {step}()')
+used = set(re.findall(r'faire\.([A-Za-z_]\w*)', shell))
+nb = (ROOT / 'FAIRe_Metadata_Filler.ipynb').read_text(encoding='utf-8')
+used |= set(re.findall(r'faire\.([A-Za-z_]\w*)', nb))
+missing_fn = sorted(n for n in used - {'py'} if not hasattr(server, n))
+check(not missing_fn, 'every function the page and notebook call exists in server.py' + (f' – missing: {missing_fn}' if missing_fn else ''))
+
 print()
 if failures:
     print(f'{len(failures)} check(s) failed.')

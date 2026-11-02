@@ -299,7 +299,15 @@ If you use this tool, please also cite the FAIRe eDNA checklist and guidelines �
 
 ## Contributing
 
-Issues and pull requests welcome. Everything lives in `server.py`: the rule-based extractor (`extract`), the workbook writer (`fill_workbook`) and the Claude prompt (`CLAUDE_PROMPT`). After changing it, run `python3 build_standalone.py` so `index.html` uses the same code.
+Issues and pull requests welcome. **All three versions run the same code:** everything lives in `server.py`.
+- The **browser page** (`index.html`) embeds a copy of `server.py`.
+- **Colab** downloads `server.py` from GitHub each time step ① runs.
+- The **Python** version is `server.py` itself.
+
+What keeps them in step:
+- **Automatic rebuild.** When `server.py` or the page layout (`standalone/shell.html`) changes on `main`, the *Keep the browser version in step* workflow rebuilds `index.html`, tests it and commits it. GitHub Pages then republishes the online tool. Locally you can run `python3 build_standalone.py` yourself.
+- **Matching options.** `tests/test_tool.py` checks that the browser page, Colab and the command line all pass every option of `prepare()` (profile, sample list, extra sources, follow links…). It also checks that they all use the same review, fill and profile steps, and that every function the page or notebook calls exists. A new option added to `prepare()` makes the tests fail until all three interfaces offer it, or it is listed as an explicit exception (the local AI reader is Python-only).
+- **Repository setting:** for the automatic rebuild to push, enable **Settings → Actions → General → Workflow permissions → Read and write permissions**.
 
 ## Licence
 
