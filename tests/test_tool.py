@@ -255,6 +255,10 @@ by = {g['code']: g for g in plan}
 check(sorted(by) == ['GOAT', 'HOLP', 'NBASW', 'NTH', 'NTHS', 'RYDA'], 'sites read from "(CODE, N=x)" and "N samples at each of the lakes"')
 check(by['NBASW']['points'] * by['NBASW']['visits'] == 45 and by['NTHS']['visits'] == 9 and by['HOLP']['date'] == '2026-01-28/2026-03-03'
       and by['GOAT']['date'] == '2026-02-05', 'points × visits, exceptions and campaign dates')
+p1 = server.sample_plan('Five replicate water samples were collected at 37 sites across three catchments.', 'Five replicate water samples were collected at 37 sites across three catchments.')
+p2 = server.sample_plan('x', 'Sample collection. A total of 450 river biofilm samples were collected over three years from 146 sites.')
+check(len(p1) == 37 and p1[0]['points'] == 5 and p2 and p2[0]['points'] == 450,
+      'plain sample counts ("5 samples at 37 sites", "a total of 450 samples") give placeholder sample rows')
 with tempfile.TemporaryDirectory() as tmp:
     sl = Path(tmp) / 'samples.csv'
     sl.write_text('sample,site,date,latitude,longitude\nA1,Lake A,07/11/2025,54.1,-2.9\nA_FB,Lake A,07/11/2025,,\nEXT_BLANK_1,,,,\n', encoding='utf-8')

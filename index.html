@@ -939,7 +939,31 @@ def sample_plan(text: str, flat: str) -> list:
                            'campaign': None, 'evidence': norm(m.group(0))[:400]})
     for g in groups:
         g['visits'] = g['visits'] or 1
-    return groups if len(groups) >= 2 else []
+    if len(groups) >= 2: return groups
+    # plain counts: "Five replicate water samples were collected at 37 sites", "A total of 450 samples were collected from 146 sites"
+    NUM = r'(\d[\d,]*|' + '|'.join(NUMBER_WORDS) + r')'
+    m = re.search(NUM + r'\s+(?:replicate\s+|independent\s+)?(?:\w+\s+){0,2}samples?\s+(?:\([^)]*\)\s+)?were\s+(?:collected|taken|sampled)\s+'
+                  r'(?:at|from)\s+(?:each\s+of\s+)?(?:the\s+)?' + NUM + r'\s+(?:\w+\s+)?(sites|locations|ponds|lakes|stations|rivers|points)', flat, re.I)
+    if m and not re.search(r'total', flat[max(0, m.start() - 15): m.start()], re.I):
+        n, k = num_word(m.group(1).replace(',', '')), num_word(m.group(2).replace(',', ''))
+        if n and k and n * k <= 5000:
+            w = len(str(k))
+            return [{'code': f'SITE{i:0{w}d}', 'name': None, 'points': n, 'visits': 1, 'date': None, 'campaign': None,
+                     'evidence': at_sentence(flat, m.start()), 'estimated': True} for i in range(1, k + 1)]
+    m = re.search(r'(?:A total of|In total,?)\s+' + NUM + r'\s+(?:\w+\s+){0,3}samples?\s+(?:\([^)]*\)\s+)?were\s+(?:collected|taken|sampled)', flat, re.I) or \
+        re.search(NUM + r'\s+(?:\w+\s+){0,2}samples?\s+\((?:including|incl\.)[^)]*\)\s+were\s+(?:collected|taken)', flat, re.I)
+    if m:
+        t = num_word(m.group(1).replace(',', ''))
+        if t and 2 <= t <= 5000:
+            return [{'code': 'S', 'name': None, 'points': t, 'visits': 1, 'date': None, 'campaign': None,
+                     'evidence': at_sentence(flat, m.start()), 'estimated': True, 'total': True}]
+    return []
+
+
+def at_sentence(flat, pos):
+    a = flat.rfind('. ', 0, pos) + 2 if flat.rfind('. ', 0, pos) >= 0 else 0
+    b = flat.find('. ', pos)
+    return flat[a: b + 1 if b > 0 else pos + 300]
 
 
 def extract(text: str) -> dict:
@@ -1763,14 +1787,18 @@ def extract(text: str) -> dict:
         yr = (meta.get('end_date') or '')[:4]
         who = meta.get('institution') or ''
         meta['bibliographicCitation'] = f'{who} ({yr}). {meta["project_title"]}. Evidence project final report' + (f' to {meta["funder"]}' if meta.get('funder') else '') + '.'
-    plan = sample_plan(mtext or text, norm(mtext) if mtext else flat)
+    plan = sample_plan(mtext or text, norm(mtext) if mtext else flat) or (sample_plan(text, flat) if mtext else [])
     meta['_primer_text'] = fl
     if plan:
         meta['sample_plan'] = plan
         cite('sample_plan', plan[0]['evidence'])
         n = sum(g['points'] * g['visits'] for g in plan)
-        parts = ', '.join('%s %d×%d' % (g['code'], g['points'], g['visits']) for g in plan)
-        meta['notes'].append(f'Sampling design read from the text: {len(plan)} sites, {n} samples ({parts}). '
+        if plan[0].get('estimated'):
+            parts = (f'{n} samples' if plan[0].get('total') else f'{len(plan)} sites × {plan[0]["points"]} samples') + \
+                    ' – sample and site names are placeholders'
+        else:
+            parts = ', '.join('%s %d×%d' % (g['code'], g['points'], g['visits']) for g in plan)
+        meta['notes'].append(f'Sampling design read from the text: {n} samples ({parts}). '
                              'Exact dates per visit and coordinates are not in the report – add them with a sample list.')
         eb_all = re.findall(r'(\w+) extraction (?:blanks?|negatives?|controls?) were (?:included|processed|extracted)', flat, re.I)
         if eb_all: meta['extraction_blanks'] = sum(num_word(x) or 0 for x in eb_all)
@@ -2131,7 +2159,8 @@ def build_samples(meta):
             geo = (f'{country}: {region}, {loc}' if region else f'{country}: {loc}') if country and loc else None
             key = g.get('campaign') or g['code']
             for v in range(1, g['visits'] + 1):
-                ids = [f'{g["code"]}{p:03d}' + (f'_V{v}' if g['visits'] > 1 else '') for p in range(1, g['points'] + 1)] if g['points'] > 1 \
+                sep, w = ('_', 2) if g['code'][-1].isdigit() else ('', 3 if g['points'] < 1000 else 4)
+                ids = [f'{g["code"]}{sep}{p:0{w}d}' + (f'_V{v}' if g['visits'] > 1 else '') for p in range(1, g['points'] + 1)] if g['points'] > 1 \
                     else [f'{g["code"]}_V{v}' if g['visits'] > 1 else g['code']]
                 fbs = fb_ids_by_campaign.get(key, [])
                 fb = fbs[v - 1] if g.get('campaign') and len(fbs) >= v else (fbs[0] if fbs else None)
