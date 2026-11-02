@@ -351,7 +351,7 @@ Optional, only for non-confidential reports: parse_with_claude(text, key) -> fac
 """
 from __future__ import annotations
 
-import html, json, os, posixpath, re, shutil, struct, subprocess, tempfile, time, zipfile
+import csv, html, io, json, os, posixpath, re, shutil, struct, subprocess, tempfile, time, zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1787,6 +1787,50 @@ def extract(text: str) -> dict:
         yr = (meta.get('end_date') or '')[:4]
         who = meta.get('institution') or ''
         meta['bibliographicCitation'] = f'{who} ({yr}). {meta["project_title"]}. Evidence project final report' + (f' to {meta["funder"]}' if meta.get('funder') else '') + '.'
+    # ── more general project-level facts ──
+    doi_head = re.search(r'(?:doi\.org/|DOI:?\s*)(10\.\d{4,5}/[^\s,;]+)', text[:3000])
+    if doi_head and not meta.get('bibliographicCitation'):
+        meta['bibliographicCitation'] = 'https://doi.org/' + doi_head.group(1).rstrip('.'); cite('bibliographicCitation', doi_head)
+    links = find_links(text)
+    if links:
+        meta['associated_resource'] = ' | '.join(('https://doi.org/' + l) if l.startswith('10.') else
+                                                 (f'https://www.ncbi.nlm.nih.gov/bioproject/{l}' if l.startswith('PRJ') else l)
+                                                 for l in links if 'github.com' not in l)
+        cite('associated_resource', next((s_ for s_ in sents if re.search(r'Zenodo|protocols\.io|BioProject|Dryad|figshare', s_)), None))
+        gh = [l for l in links if 'github.com' in l and any(re.search(r'\bcode\b|\bscripts?\b|data availab|\brepositor|reproduc|\bworkflow|\bpipeline', s_, re.I) and not re.search(r'database is available|database.{0,20}download', s_, re.I)
+                                                             and l.split('/')[-1][:12].lower() in re.sub(r'\s', '', s_).lower() for s_ in sents)]
+        if gh and not meta.get('code_repo'): meta['code_repo'] = ' | '.join(gh); cite('code_repo', next((s_ for s_ in sents if 'github' in s_.lower()), None))
+    for s_ in sorted(fsents, key=lambda x: not re.search(r'primer', x, re.I)):
+        tv = re.search(r'\b(vertebrate|fish|amphibian|mammal|bird|eukaryot|prokaryot|bacteri|fung|metazoa|invertebrate|diatom|plant)(?:s|es|a|ic|al|ia|i|e)?\b', s_, re.I)
+        if tv and re.search(r'primer|target|amplif|assay|coverage', s_, re.I):
+            tax = {'vertebrate': 'Vertebrata', 'fish': 'Actinopterygii', 'amphibian': 'Amphibia', 'mammal': 'Mammalia', 'bird': 'Aves',
+                   'eukaryot': 'Eukaryota', 'prokaryot': 'Bacteria | Archaea', 'bacteri': 'Bacteria', 'fung': 'Fungi', 'metazoa': 'Metazoa',
+                   'invertebrate': 'Metazoa', 'diatom': 'Bacillariophyta', 'plant': 'Viridiplantae'}[tv.group(1).lower()]
+            for mk, a in assays.items():
+                if not a.get('targetTaxonomicAssay') and (len(assays) == 1 or mk in s_):
+                    a['targetTaxonomicAssay'] = a['targetTaxonomicScope'] = tax
+                    cite(f'{mk}.targetTaxonomicAssay', s_); cite(f'{mk}.targetTaxonomicScope', s_)
+            break
+    for mk, a in assays.items():
+        sub = re.search(r'\b' + re.escape(mk) + r'[\s-]*(V\d{1,2}(?:-V?\d)?)\b', fl) or (re.search(r'\b(V\d)\s+region', fl) if len(assays) == 1 else None)
+        if sub and not a.get('target_subfragment'): a['target_subfragment'] = sub.group(1); cite(f'{mk}.target_subfragment', sub)
+    rp = re.search(r'\b(Duplicate|Triplicate|Quadruplicate)\s+PCRs?\b', fl, re.I)
+    if rp:
+        for mk in assays: put_a(mk, 'pcr_rep', {'duplicate': '2', 'triplicate': '3', 'quadruplicate': '4'}[rp.group(1).lower()], rp)
+    nt = next((s_ for s_ in fsents if re.search(r'remov|exclud|discard', s_, re.I) and re.search(r'human|domestic|non-?target|livestock|contamina\w+ species', s_, re.I)), None)
+    if nt and not meta.get('screen_nontarget_method'): meta['screen_nontarget_method'] = nt[:400]; cite('screen_nontarget_method', nt)
+    cr = re.search(r'©\s*(?:\d{4}\s+)?(The Author\(s\)|The Authors|[A-Z][^.]{2,80}?)(?:\.|\s+(?:Published|This))', text[:6000])
+    if cr: meta['rights_holder'] = norm(cr.group(1)); cite('rights_holder', cr.group(0))
+    if not any(a.get('otu_db') for a in assays.values()):
+        db = re.search(r'((?:(?-i:[A-Z])[\w-]*\s+){0,4}(?:vertebrate|fish|eukaryote|metazoan|invertebrate|plant)?\s*(?:12S|16S|18S|COI|ITS|rbcL|CytB)\s+(?:reference\s+)?(?:database|library))(\s*\([^)]{0,80}\))?', fl, re.I)
+        if db:
+            for mk in assays: put_a(mk, 'otu_db', norm(db.group(0)), db)
+    sk = re.search(r'(MiSeq|NovaSeq|NextSeq|iSeq|HiSeq)[^.]{0,60}?(\d)\s*[x×]\s*(\d{3})\s*(?:bp)?\s*\(?\s*(v\d)\s*(?:chemistry|reagent)', fl, re.I) or \
+         re.search(r'(MiSeq|NovaSeq|NextSeq|iSeq|HiSeq)[^.]{0,60}?\b(v\d)\b\s*(\d)\s*[x×]?\s*(\d{3})\s*bp', fl, re.I)
+    if sk:
+        g = sk.groups()
+        ver, n, ln = (g[3], g[1], g[2]) if g[1].isdigit() else (g[1], g[2], g[3])
+        for mk in assays: put_a(mk, 'seq_kit', f'{g[0]} Reagent Kit {ver.lower()} ({n} × {ln} bp)', sk)
     plan = sample_plan(mtext or text, norm(mtext) if mtext else flat) or (sample_plan(text, flat) if mtext else [])
     meta['_primer_text'] = fl
     if plan:
@@ -2018,10 +2062,10 @@ def project_values(meta: dict, version: str) -> dict:
         'sterilise_method': meta.get('sterilise_method'),
         'neg_cont_0_1': '1' if meta.get('neg_controls') else '0', 'pos_cont_0_1': '1' if meta.get('pos_controls') else '0',
         'checkls_ver': version, 'mod_date': time.strftime('%Y-%m-%d'),
-        'license': meta.get('license'), 'rightsHolder': meta.get('institution'), 'accessRights': meta.get('access_rights'),
+        'license': meta.get('license'), 'rightsHolder': meta.get('rights_holder') or meta.get('institution'), 'accessRights': meta.get('access_rights'),
         'bibliographicCitation': meta.get('bibliographicCitation') if re.search(r'10\.\d{4,}/|https?://', str(meta.get('bibliographicCitation') or '')) else None, 'code_repo': meta.get('code_repo'),
         'biological_rep': meta.get('biological_rep'), 'pcr_0_1': '1',
-        'pcr_method_additional': '; '.join(n for n in notes if 'normalised' in n) or None,
+        'pcr_method_additional': meta.get('pcr_method_additional') or '; '.join(n for n in notes if 'normalised' in n) or None,
         'barcoding_pcr_appr': meta.get('barcoding_pcr_appr'),
         'pcr2_amplificationReactionVolume': meta.get('pcr2_amplificationReactionVolume'),
         'pcr2_commercial_mm': meta.get('pcr2_commercial_mm'), 'pcr2_custom_mm': meta.get('pcr2_custom_mm'),
@@ -2042,7 +2086,14 @@ def project_values(meta: dict, version: str) -> dict:
         'otu_clust_cutoff': meta.get('otu_clust_cutoff'), 'screen_contam_method': meta.get('screen_contam_method'),
         'otu_raw_description': meta.get('otu_raw_description'),
         'bioinfo_method_additional': meta.get('bioinfo_method_additional'),
+        **{t: meta.get(t) for t in EXTRA_PROJECT_TERMS},
     }
+
+
+EXTRA_PROJECT_TERMS = ('associated_resource', 'checksum_method', 'thermocycler', 'pcr2_annealingTemp', 'pcr2_cycles',
+                       'pcr2_thermocycler', 'merge_min_overlap', 'min_len_tool', 'tax_class_collapse', 'tax_class_other',
+                       'screen_nontarget_method', 'screen_geograph_method', 'screen_other', 'demux_max_mismatch', 'min_reads_tool',
+                       'parent_project_id', 'informationWithheld', 'dataGeneralizations')
 
 
 def assay_value(a: dict, term: str, meta: dict):
@@ -2296,8 +2347,18 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     hdr, req = header_map(rows, ss)
     rows = {k: v for k, v in rows.items() if k <= 3}
     samples = build_samples(meta)
+    extra_cols = []                                   # user-defined columns (FAIRe allows extra terms at the end)
+    for rec, _, _ in samples:
+        for k in (rec.get('_extra') or {}):
+            if k not in hdr and k not in extra_cols: extra_cols.append(k)
+    if extra_cols:
+        last = max(col_num(c) for c in rows[3]['cells'])
+        for j, k in enumerate(extra_cols, start=1):
+            col = col_letter(last + j)
+            rows[1]['cells'][col] = cell_xml(f'{col}1', 'O'); rows[2]['cells'][col] = cell_xml(f'{col}2', 'User defined')
+            rows[3]['cells'][col] = cell_xml(f'{col}3', k); hdr[k] = col; req[col] = 'O'
     for i, (rec, _, control) in enumerate(samples):
-        write_record(rows, 4 + i, rec, hdr, req, control)
+        write_record(rows, 4 + i, dict(rec, **(rec.get('_extra') or {})), hdr, req, control)
     validate_rows('sampleMetadata', rows, ss, info, issues)
     sample_rows = rows
     pkg[p] = replace_sheet_data(xml, rows).encode('utf-8')
@@ -2326,6 +2387,21 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
     check_links(sample_rows, rows, ss, issues)
     pkg[p] = replace_sheet_data(xml, rows).encode('utf-8')
 
+    # taxaRaw / taxaFinal (only when taxon tables were given)
+    taxa_counts = {}
+    for sheet_name, key in (('taxaRaw', 'taxa_raw'), ('taxaFinal', 'taxa_final')):
+        recs = meta.get(key) or []
+        if not recs or sheet_name not in paths: continue
+        p = paths[sheet_name]; xml = pkg[p].decode('utf-8')
+        rows = parse_rows(xml)
+        hdr, req = header_map(rows, ss)
+        rows = {k: v for k, v in rows.items() if k <= 3}
+        for i, rec in enumerate(recs):
+            write_record(rows, 4 + i, rec, hdr, req)
+        validate_rows(sheet_name, rows, ss, info, issues)
+        pkg[p] = replace_sheet_data(xml, rows).encode('utf-8')
+        taxa_counts[sheet_name] = len(recs)
+
     # README notes
     if 'README' in paths:
         p = paths['README']; xml = pkg[p].decode('utf-8')
@@ -2349,7 +2425,7 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
         'institution': meta.get('institution'), 'lakes': len(meta.get('sites') or []),
         'rounds': len(meta.get('rounds') or []), 'assays': [a['assay_name'] for a in meta.get('assays') or []],
         'sampleRows': len(samples), 'experimentRows': n_runs, 'projectTermsFilled': filled,
-        'notes': meta.get('notes') or [], 'validation': summarise_issues(issues),
+        'notes': meta.get('notes') or [], 'validation': summarise_issues(issues), 'taxa': taxa_counts,
     }
 
 
@@ -2357,6 +2433,7 @@ def fill_workbook(template_path, meta: dict, report_filename: str, output_path) 
 
 SECTIONS = [
     ('Project', ['recordedBy', 'recordedByID', 'project_contact', 'institution', 'institutionID', 'project_name', 'project_id',
+                 'parent_project_id', 'associated_resource', 'informationWithheld', 'dataGeneralizations',
                  'study_factor', 'assay_type', 'license', 'rightsHolder', 'accessRights', 'bibliographicCitation', 'code_repo']),
     ('Controls & contamination', ['sterilise_method', 'neg_cont_0_1', 'pos_cont_0_1', 'screen_contam_method']),
     ('Sampling', ['biological_rep', 'samp_collect_method', 'samp_size', 'samp_size_unit', 'env_broad_scale', 'env_local_scale',
@@ -2371,12 +2448,14 @@ SECTIONS = [
              'pcr_primer_name_reverse', 'pcr_primer_forward', 'pcr_primer_reverse', 'pcr_primer_reference_forward',
              'pcr_primer_reference_reverse', 'pcr_primer_vol_forward', 'pcr_primer_vol_reverse', 'pcr_primer_conc_forward',
              'pcr_primer_conc_reverse', 'ampliconSize', 'commercial_mm', 'custom_mm', 'amplificationReactionVolume', 'pcr_dna_vol',
-             'pcr_rep', 'nucl_acid_amp', 'pcr_cond', 'annealingTemp', 'pcr_cycles', 'pcr_method_additional']),
-    ('Library preparation & sequencing', ['barcoding_pcr_appr', 'pcr2_commercial_mm', 'pcr2_custom_mm', 'pcr2_amplificationReactionVolume',
+             'pcr_rep', 'nucl_acid_amp', 'pcr_cond', 'annealingTemp', 'pcr_cycles', 'thermocycler', 'pcr_method_additional']),
+    ('Library preparation & sequencing', ['barcoding_pcr_appr', 'pcr2_annealingTemp', 'pcr2_cycles', 'pcr2_thermocycler', 'checksum_method', 'pcr2_commercial_mm', 'pcr2_custom_mm', 'pcr2_amplificationReactionVolume',
                                           'pcr2_dna_vol', 'pcr2_cond', 'platform', 'instrument', 'seq_kit', 'lib_layout',
                                           'adapter_forward', 'adapter_reverse', 'lib_screen', 'sequencing_location',
                                           'seq_method_additional']),
-    ('Bioinformatics', ['sop_bioinformatics', 'trim_method', 'trim_param', 'demux_tool', 'merge_tool', 'min_len_cutoff',
+    ('Bioinformatics', ['sop_bioinformatics', 'trim_method', 'trim_param', 'demux_tool', 'demux_max_mismatch', 'merge_tool',
+                        'merge_min_overlap', 'min_len_cutoff', 'min_len_tool', 'min_reads_tool', 'tax_class_collapse', 'tax_class_other',
+                        'screen_nontarget_method', 'screen_geograph_method', 'screen_other',
                         'error_rate_tool', 'error_rate_type', 'error_rate_cutoff', 'chimera_check_method', 'chimera_check_param',
                         'otu_clust_tool', 'otu_clust_cutoff', 'min_reads_cutoff', 'min_reads_cutoff_unit', 'otu_db', 'tax_assign_cat',
                         'otu_seq_comp_appr', 'tax_class_id_cutoff', 'tax_class_query_cutoff',
@@ -2393,9 +2472,9 @@ GENERATED = {'project_id', 'assay_type', 'pcr_0_1', 'neg_cont_0_1', 'pos_cont_0_
              'otu_raw_description', 'tax_assign_cat'}
 # FAIRe term -> key under which the extractor recorded its source sentence
 EVIDENCE_KEY = {
-    'recordedBy': 'recorded_by', 'project_contact': 'project_contact',
+    'recordedBy': 'recorded_by', 'project_contact': 'project_contact', 'rightsHolder': 'rights_holder',
     'institution': 'institution', 'institutionID': 'institution', 'project_name': 'project_title',
-    'bibliographicCitation': 'project_title', 'rightsHolder': 'institution',
+    'bibliographicCitation': 'project_title',
     'sterilise_method': 'sterilise_method', 'neg_cont_0_1': 'neg_controls', 'pos_cont_0_1': 'pos_controls',
     'screen_contam_method': 'screen_contam_method', 'biological_rep': 'biological_rep',
     'samp_collect_method': 'samp_collect_method', 'samp_size': 'samp_size', 'samp_size_unit': 'samp_size_unit',
@@ -2498,9 +2577,16 @@ SAMPLE_ALIASES = {
     'samp_size': r'samp_size|sample[ _]volume(?:[ _]?\(?ml\)?)?|volume[ _]collected(?:[ _]?\(?ml\)?)?',
     'depth': r'depth(?:[ _]?\(?m\)?)?',
     'notes': r'notes?|comments?|remarks?',
+    'samp_collect_method': r'collection[ _]method|sampling[ _]method|collect(?:ion)?[ _]device',
+    'samp_mat_process': r'filtration[ _]method|filter(?:ing)?[ _]method|processing(?:[ _]method)?',
+    'samp_store_method_additional': r'storage(?:[ _]method)?|preservation',
+    'temp': r'water[ _]?temp(?:erature)?(?:[ _]?\(?°?c\)?)?|temp(?:erature)?(?:[ _]?\(?°?c\)?)?',
+    'seq_run_id': r'library|library[ _]name|lib|sub[ _-]?library|seq(?:uencing)?[ _]run(?:[ _]id)?|run(?:[ _]id)?',
+    'habitat': r'habitat(?:[ _]type)?|substrate',
 }
 RUN_TERMS = {'pcr_plate_id', 'lib_id', 'seq_run_id', 'lib_conc', 'lib_conc_unit', 'mid_forward', 'mid_reverse', 'filename',
-             'filename2', 'checksum_filename', 'checksum_filename2', 'associatedSequences', 'input_read_count', 'output_read_count'}
+             'filename2', 'checksum_filename', 'checksum_filename2', 'associatedSequences', 'input_read_count', 'output_read_count',
+             'output_otu_num', 'otu_num_tax_assigned'}
 
 
 def read_table(path) -> list:
@@ -2525,11 +2611,33 @@ def read_table(path) -> list:
     raise ValueError('The sample list needs a column called "sample" or "samp_name" (one row per sample).')
 
 
+CONTROL_CODES: dict = {}      # code -> kind, read from a data README ("EB = extraction blank")
+
+
+def control_codes_from(text: str) -> dict:
+    codes = {}
+    kinds = [(r'PCR\s*neg\w*|no[- ]template|NTC', 'PCR negative'), (r'PCR\s*pos\w*|positive', 'positive control'),
+             (r'extraction\s*(?:blank|neg\w*)', 'extraction negative'), (r'filter\s*blank', 'process negative'),
+             (r'field\s*(?:blank|neg\w*)', 'field negative'), (r'lysis\s*blank', 'extraction negative')]
+    for m in re.finditer(r"['‘’\"]?\b([A-Z]{2,5})\b['‘’\"]?\s*(?:\((?:e\.g\.\s*)?([^)]{0,40})\)|\(e\.g\.[^)]*\))?\s*(?:are|is|=|denotes|:)?\s*(?:an?\s+)?([A-Za-z -]{3,40})?", text):
+        code, inner, after = m.group(1), m.group(2) or '', m.group(3) or ''
+        if code in ('PCR', 'DNA', 'RNA', 'UK', 'USA'): continue
+        for pat, kind in kinds:
+            if re.match(pat, inner.strip(), re.I) or re.match(pat, after.strip(), re.I):
+                codes.setdefault(code, kind); break
+    return codes
+
+
 def _blank_kind(name, cat):
+    up = str(name).upper()
+    for code, kind in sorted(CONTROL_CODES.items(), key=lambda kv: -len(kv[0])):
+        if up.startswith(code) or re.search(code + r'\d*[A-Z]?$', up):
+            return kind
     t = re.sub(r'[_\-.]', ' ', f'{name} {cat}'.lower())
-    if not re.search(r'blank|negative|\bneg\b|\bntc\b|control|\bfb\d*\b|\beb\d*\b|\bnc\d*\b', t) or re.search(r'positive|mock', t): return None
-    if re.search(r'\bpcr\b|pcrneg|\bntc\b|no template', t): return 'PCR negative'
-    if re.search(r'extract|\bext\b|\beb\d*\b', t): return 'extraction negative'
+    if re.search(r'positive|mock|^pos\d|\bpos\b', t): return 'positive control'
+    if not re.search(r'blank|negative|\bneg\d*\b|^neg|\bntc\b|control|\bfb\d*\b|\beb\d*\b|\bnc\d*\b|bk\d*\b', t): return None
+    if re.search(r'\bpcr\b|pcrneg|\bntc\b|no template|^neg', t): return 'PCR negative'
+    if re.search(r'extract|\bext\b|eb\d*\b', t): return 'extraction negative'
     return 'field negative'
 
 
@@ -2546,20 +2654,29 @@ def samples_from_list(meta, common, assays, generated):
     country, region = meta.get('country'), meta.get('region')
     out, ignored = [], set()
     for row in meta['sample_list']:
-        r = {}
+        r, unmatched = {}, {}
         for k, v in row.items():
             v = str(v or '').strip(); k0 = str(k or '').strip()
             if not k0 or not v: continue
             term = next((t for t in list(hdr_terms) + list(RUN_TERMS) if t.lower() == k0.lower()), None) or \
                    next((t for t, pat in SAMPLE_ALIASES.items() if re.fullmatch(pat, k0, re.I)), None)
             if term: r[term] = v
-            else: ignored.add(k0)
+            else: ignored.add(k0); unmatched[re.sub(r'\W+', '_', k0).strip('_')] = v
         if not r.get('samp_name'): continue
         cat = r.pop('samp_category', '')
         kind = _blank_kind(r['samp_name'], f'{cat} {r.get("notes", "")}')
         site = r.pop('site', None)
+        extra = []
+        if cat and not re.search(r'sample|control|blank|neg|pos|mock', cat, re.I): extra.append(f'type: {cat}'); cat = ''
+        if r.get('habitat'): extra.append(f'habitat: {r.pop("habitat")}')
+        if site and (len(site) <= 5 or re.fullmatch(r'(north|south|east|west|upper|lower|centre|center)\w*', site, re.I)):
+            extra.append(f'location: {site}'); site = None
         rec = dict(common)
-        if kind:
+        if kind == 'positive control':
+            rec.update(samp_category='positive control', pos_cont_type=meta.get('pos_cont_desc') or 'positive control (see projectMetadata)',
+                       neg_cont_type=NA_C, rel_cont_id=NA_C, env_broad_scale=NA_C, env_local_scale=NA_C, env_medium=NA_C,
+                       habitat_natural_artificial_0_1=NA_C)
+        elif kind:
             rec.update(samp_category='negative control', neg_cont_type=kind, pos_cont_type=NA_C, rel_cont_id=NA_C,
                        env_broad_scale=NA_C, env_local_scale=NA_C, env_medium=NA_C, habitat_natural_artificial_0_1=NA_C)
         elif re.search(r'positive|mock', cat, re.I):
@@ -2572,7 +2689,29 @@ def samples_from_list(meta, common, assays, generated):
         if site:
             rec['geo_loc_name'] = (f'{country}: {region}, {site}' if region else f'{country}: {site}') if country else site
         if r.get('depth'): rec['minimumDepthInMeters'] = rec['maximumDepthInMeters'] = r.pop('depth')
-        if r.get('notes'): rec['org_note'] = r.pop('notes')
+        rec['_extra'] = dict(unmatched)
+        for e in extra:
+            k, v = e.split(': ', 1); rec['_extra'][{'type': 'sample_type'}.get(k, k)] = v
+        if r.get('notes'): rec['_extra']['notes'] = r.pop('notes')
+        links = (meta.get('_blank_links') or {}).get(r['samp_name'])
+        if links and not kind: rec['rel_cont_id'] = ' | '.join(dict.fromkeys(links))
+        mx = meta.get('_read_matrix')
+        if mx and r['samp_name'] in mx['samples']:
+            counts = [t['counts'].get(r['samp_name'], 0) for t in mx['taxa']]
+            r.setdefault('output_read_count', f'{sum(counts):g}')
+            r.setdefault('output_otu_num', str(sum(1 for c in counts if c)))
+        lib = r.get('seq_run_id')
+        sra = (meta.get('sra_by_sample') or {}).get(r['samp_name']) or (meta.get('sra_by_library') or {}).get(lib or '')
+        if sra:
+            files = [f.split('/')[-1] for f in (sra.get('fastq_ftp') or '').split(';') if f]
+            md5 = [m for m in (sra.get('fastq_md5') or '').split(';') if m]
+            r.setdefault('seq_run_id', sra.get('library_name') or sra.get('run_accession'))
+            r.setdefault('associatedSequences', sra.get('run_accession'))
+            if files: r.setdefault('filename', files[0])
+            if len(files) > 1: r.setdefault('filename2', files[1])
+            if md5: r.setdefault('checksum_filename', md5[0])
+            if len(md5) > 1: r.setdefault('checksum_filename2', md5[1])
+            if (meta.get('sra_by_sample') or {}).get(r['samp_name']) and sra.get('read_count'): r.setdefault('input_read_count', sra['read_count'])
         if re.fullmatch(r'\d{5}(?:\.\d+)?', r.get('eventDate', '')):        # Excel date serial number
             r['eventDate'] = (date(1899, 12, 30) + timedelta(days=int(float(r['eventDate'])))).isoformat()
         if r.get('eventDate') and not re.match(r'\d{4}-\d{2}', r['eventDate']):
@@ -2583,9 +2722,9 @@ def samples_from_list(meta, common, assays, generated):
         run = {k: r.pop(k) for k in list(r) if k in RUN_TERMS}
         rec.update(r); rec['_run'] = run
         an = [a.strip() for a in str(rec.get('assay_name') or '').split('|') if a.strip()]
-        out.append((rec, an or assays, 'field' if kind == 'field negative' else 'lab' if kind else False))
+        out.append((rec, an or assays, 'field' if kind == 'field negative' else 'lab' if kind and kind != 'positive control' else False))
     if ignored:
-        _note(meta, 'Sample list columns not used (no matching FAIRe term): ' + ', '.join(sorted(ignored)[:15]))
+        _note(meta, 'Sample list columns with no FAIRe term were added as user-defined columns at the end of sampleMetadata: ' + ', '.join(sorted(ignored)[:15]))
     if meta.pop('_dayfirst', None):
         _note(meta, 'Dates in the sample list were read day-first (e.g. 07/11/2025 = 7 November 2025).')
     _note(meta, f'{len(out)} sample rows taken from your sample list (instead of the {len(generated)} estimated from the report).')
@@ -2970,7 +3109,7 @@ def assess(meta: dict, items: list, info: dict | None = None) -> list:
             check.append('the report also gives: ' + '; '.join(dict.fromkeys(alt))[:160])
         if it['generated']:
             good.append('set by the tool')
-        elif a.get('origin') in ('profile', 'primer library', 'user'):
+        elif a.get('origin'):               # from the user, a profile, the primer library or another source
             pass
         elif not it.get('evidence'):
             if a.get('origin') != 'user': check.append('no source sentence – the value was inferred')
@@ -3280,7 +3419,705 @@ def parse_report_regex(text: str) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  6. Google Colab: a point-and-click review screen (used by the notebook)
+#  6. Extra sources: protocols, dataset records, code repositories, data files, sequence archives
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── fetching (only when the user gives a public link or accession) ───────────
+
+FETCH_OVERRIDES: dict = {}          # url -> bytes, used by tests (no network)
+FETCH_LOG: list = []
+MAX_DOWNLOAD = 60 * 1024 * 1024
+
+
+def fetch(url: str, max_bytes: int = MAX_DOWNLOAD) -> bytes:
+    if url in FETCH_OVERRIDES:
+        FETCH_LOG.append(url); return FETCH_OVERRIDES[url]
+    import urllib.request
+    req = urllib.request.Request(url, headers={'User-Agent': 'FAIRe-Metadata-Filler (+https://github.com/UKCEH-MolecularEcology/fair-edna-filler)',
+                                               'Accept': '*/*'})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            size = int(r.headers.get('Content-Length') or 0)
+            if size and size > max_bytes: raise RuntimeError(f'{url} is {size / 1e6:.0f} MB – skipped (too large)')
+            data = r.read(max_bytes + 1)
+    except OSError as e:
+        raise RuntimeError(f'could not download {url} ({e})')
+    if len(data) > max_bytes: raise RuntimeError(f'{url} is larger than {max_bytes // 1_000_000} MB – skipped')
+    FETCH_LOG.append(url)
+    return data
+
+
+def fetch_json(url):
+    return json.loads(fetch(url).decode('utf-8'))
+
+
+# ── recognising what the user (or the report) points to ─────────────────────
+
+def _squash(s):
+    return re.sub(r'\s+', '', s)
+
+
+def find_links(text: str) -> list:
+    """Public identifiers mentioned in a report: protocols.io / Zenodo / Dryad / Figshare DOIs, GitHub repos, BioProjects."""
+    t = text.replace(' ', ' ')
+    found = []
+    # URLs and DOIs in PDFs are often broken by spaces: "https:// doi. org/ 10. 5281/ zenodo. 15723454"
+    for m in re.finditer(r'(?:https?:\s*/\s*/\s*)?(?:dx\.\s*)?(?:doi\.\s*org\s*/\s*)?10\.\s*\d{4,5}\s*/[^\s;,)]*(?:\s+[^\s;,)]+){0,10}', t):
+        cand = _squash(m.group(0))
+        d = re.search(r'10\.\d{4,5}/[\w.\-/]+', cand)
+        if d:
+            doi = d.group(0).rstrip('.')
+            doi = re.match(r'(10\.17504/protocols\.io\.[a-z0-9]+(?:/v\d+)?|10\.5281/zenodo\.\d+|10\.5061/dryad\.[\w]+|10\.6084/m9\.figshare\.\d+(?:\.v\d+)?|.*)', doi).group(1)
+            if re.match(r'10\.(17504|5281|5061|6084)/', doi): found.append(doi)
+    for m in re.finditer(r'github\.\s*com\s*/\s*([^\s)]+(?:\s+[^\s)]+){0,16})', t):
+        parts = re.match(r'([A-Za-z0-9\-_.]+)/([A-Za-z0-9\-_.]+)', _squash(m.group(1)))
+        if parts: found.append(f'https://github.com/{parts.group(1)}/{parts.group(2).rstrip(".")}')
+    found += re.findall(r'\b(PRJ(?:NA|EB|DB)\d+|[SED]RP\d{5,})\b', t)
+    out = []
+    for f in found:
+        if f not in out: out.append(f)
+    return out
+
+
+def classify(src: str) -> str:
+    s = str(src).strip()
+    p = Path(s)
+    if p.exists():
+        if p.suffix.lower() in ('.csv', '.tsv', '.txt', '.xlsx') and not re.search(r'protocol', p.name, re.I): return 'file:data'
+        if p.suffix.lower() in ('.r', '.py', '.sh', '.smk', '.nf', '.yaml', '.yml'): return 'file:code'
+        if p.suffix.lower() == '.zip': return 'file:zip'
+        return 'file:protocol'
+    if re.search(r'protocols\.io', s, re.I): return 'protocol'
+    if re.search(r'github\.com/', s, re.I): return 'github'
+    if re.search(r'zenodo', s, re.I): return 'zenodo'
+    if re.fullmatch(r'PRJ(?:NA|EB|DB)\d+|[SED]RP\d+', s): return 'sra'
+    if re.search(r'10\.\d{4,5}/', s): return 'doi'
+    return 'unknown'
+
+
+# ── protocols ────────────────────────────────────────────────────────────────
+
+def protocol_to_prose(text: str) -> str:
+    """Step-list protocols (protocols.io exports) -> sentences the extractor can read."""
+    lines = [l.strip() for l in text.replace('ʼ', "'").split('\n')]
+    out, cur = [], ''
+    for l in lines:
+        if not l: continue
+        if re.match(r'protocols\.io \||^\d+/\d+$|^Create & collaborate|^Create free account', l): continue
+        new = re.match(r'(\d+(\.\d+)*\s+[A-Z]|\d+\.\s|[-•▪]\s|Section \d+|Step \d+)', l) or \
+              re.match(r'\d+(\.\d+)?\s*(µ|u)L\b|\d+\s*°C|\d+\s*cycles', l)
+        if new and cur:
+            out.append(cur.rstrip(' .:') + '.'); cur = l
+        else:
+            cur = (cur + ' ' + l).strip()
+    if cur: out.append(cur.rstrip(' .:') + '.')
+    return '\n'.join(out)
+
+
+def _pcr_block(text, start_pat, end_pat):
+    m = re.search(start_pat, text, re.I)
+    if not m: return None
+    e = re.search(end_pat, text[m.end():], re.I)
+    return text[m.start(): m.end() + (e.start() if e else 4000)]
+
+
+def _cycling(block):
+    temps = re.findall(r'(\d{2,3})\s*°C\s*(?:for\s*)?\(?\s*(\d+(?:\.\d+)?)\s*(s|sec\w*|min\w*|m)\b', block)
+    cyc = re.search(r'(\d{1,2})\s*cycles', block)
+    if not temps or not cyc: return None
+    unit = lambda u: 'min' if u.startswith('m') else 's'
+    pre = [t for t in re.findall(r'(\d{2,3})\s*°C[^0-9]{0,12}?(\d+(?:\.\d+)?)\s*(s|sec\w*|min\w*)', block[:cyc.start()])]
+    inside = re.findall(r'(\d{2,3})\s*°C[^0-9]{0,12}?(\d+(?:\.\d+)?)\s*(s|sec\w*|min\w*)', block[cyc.end(): cyc.end() + 160])
+    after = re.findall(r'(\d{2,3})\s*°C[^0-9]{0,12}?(\d+(?:\.\d+)?)\s*(s|sec\w*|min\w*)', block[cyc.end() + 160:])
+    parts = []
+    if pre: parts.append(f'initial denaturation:{pre[0][0]}_{pre[0][1]}{unit(pre[0][2])}')
+    names = ['denaturation', 'annealing', 'elongation'] if len(inside) >= 3 else ['denaturation', 'annealing/elongation']
+    for n, (tp, d, u) in zip(names, inside):
+        parts.append(f'{n}:{tp}_{d}{unit(u)}')
+    if after: parts.append(f'final elongation:{after[0][0]}_{after[0][1]}{unit(after[0][2])}')
+    parts.append(f'{cyc.group(1)} cycles')
+    ann = inside[1][0] if len(inside) >= 2 else None
+    return '; '.join(parts), ann, cyc.group(1)
+
+
+def _recipe(block):
+    comps = re.findall(r'(\d+(?:\.\d+)?)\s*(?:µ|u)L\s+(?:of\s+)?([^\n.;]{3,80})', block)
+    if not comps: return {}
+    total, mm, custom, out = 0.0, None, [], {}
+    stated = re.search(r'(\d+(?:\.\d+)?)\s*(?:µ|u)L\s+(?:PCR\s*\d?\s+)?reactions?', block, re.I)
+    for v, what in comps:
+        if re.match(r'(PCR\s*\d?\s+)?reactions?\b', what.strip(), re.I): continue
+        v = float(v); each = re.search(r'\beach\b', what, re.I)
+        total += v * (2 if each and re.search(r'primer', what, re.I) else 1)
+        if re.search(r'master ?mix|ready ?mix|\bmix\b|polymerase', what, re.I) and not mm: mm = norm(what)
+        elif re.search(r'template|DNA', what, re.I): out['dna'] = f'{v:g}'
+        elif re.search(r'primer', what, re.I):
+            out['primer_vol'] = f'{v:g}'
+            c = re.search(r'(\d+(?:\.\d+)?)\s*(?:µ|u)M', what)
+            if c: out['primer_conc'] = c.group(1)
+        else: custom.append(f'{v:g} µL {norm(what)}')
+    out.update(total=stated.group(1) if stated else f'{total:g}', mm=mm, custom='; '.join(custom) or None)
+    return out
+
+
+def read_protocol_text(text: str, label: str, doi: str | None) -> dict:
+    """Rule-based reading of a protocol, plus list-style PCR recipes and cycling."""
+    prose = protocol_to_prose(text)
+    meta = parse_report_regex(prose)
+    meta['_primer_text'] = norm(prose)
+    if not meta.get('assays'):                       # protocols rarely repeat the marker name: use printed primer sequences
+        seqs = re.findall(r'[ACGTRYKMSWBDHVNI]{15,}', prose)
+        for e in PRIMER_LIBRARY:
+            if any(_seq_key(x) == _seq_key(e[3]) for x in seqs) and not any(a['marker'] == e[1] for a in meta['assays']):
+                meta['assays'].append({'marker': e[1], 'assay_name': e[1], 'target_gene': TARGET_GENE.get(e[1], e[1])})
+        for a in meta['assays']:
+            for x in seqs:
+                hit = primer_by_seq(x)
+                if hit and hit[1] == a['marker']:
+                    a.setdefault(f'primer_{hit[2]}', x); a.setdefault(f'primer_name_{hit[2]}', hit[0][0])
+                    meta['_evidence'][f'{a["marker"]}.primer_{hit[2]}'] = norm(prose[max(0, prose.find(x) - 120): prose.find(x) + 40])
+    apply_library(meta)
+    flat = norm(prose)
+    blocks = {'pcr1': _pcr_block(prose, r'first PCR|PCR\s*1\b|Step 1\b.*PCR', r'PCR\s*2\b|second PCR|indexing|Step [2-9]'),
+              'pcr2': _pcr_block(prose, r'PCR\s*2\b|second PCR|indexing PCR', r'Step [4-9]|Library Quantification|Sequencing|Section \d')}
+    ev = meta.setdefault('_evidence', {})
+    for key, block in blocks.items():
+        if not block: continue
+        rc, cy = _recipe(block), _cycling(block)
+        if key == 'pcr1':
+            for a in meta['assays']:
+                if rc.get('total'): a['amplificationReactionVolume'] = rc['total']
+                if rc.get('dna'): a['pcr_dna_vol'] = rc['dna']
+                if rc.get('mm'): a['commercial_mm'] = rc['mm']
+                if rc.get('custom'): a['custom_mm'] = rc['custom']
+                if rc.get('primer_vol'): a['pcr_primer_vol'] = rc['primer_vol']
+                if rc.get('primer_conc'): a['pcr_primer_conc'] = rc['primer_conc']
+                if cy: a['pcr_cond'], a['annealingTemp'], a['pcr_cycles'] = cy
+                rep = re.search(r'in (duplicate|triplicate|quadruplicate)', block, re.I)
+                if rep: a['pcr_rep'] = {'duplicate': '2', 'triplicate': '3', 'quadruplicate': '4'}[rep.group(1).lower()]
+                for k in ('amplificationReactionVolume', 'pcr_dna_vol', 'commercial_mm', 'custom_mm', 'pcr_primer_vol', 'pcr_primer_conc',
+                          'pcr_cond', 'annealingTemp', 'pcr_cycles', 'pcr_rep'):
+                    ev[f'{a["marker"]}.{k}'] = norm(block)[:400]
+        else:
+            if rc.get('total'): meta['pcr2_amplificationReactionVolume'] = rc['total']
+            if rc.get('dna'): meta['pcr2_dna_vol'] = rc['dna']
+            if rc.get('mm'): meta['pcr2_commercial_mm'] = rc['mm']
+            if rc.get('custom'): meta['pcr2_custom_mm'] = rc['custom']
+            if cy: meta['pcr2_cond'], meta['pcr2_annealingTemp'], meta['pcr2_cycles'] = cy
+            for k in ('pcr2_amplificationReactionVolume', 'pcr2_dna_vol', 'pcr2_commercial_mm', 'pcr2_custom_mm', 'pcr2_cond',
+                      'pcr2_annealingTemp', 'pcr2_cycles'):
+                ev[k] = norm(block)[:400]
+    rules = [  # (key, pattern, group or callable)
+        ('thermocycler', r'((?:Applied Biosystems|Bio-?Rad|Eppendorf|Thermo Fisher|Analytik Jena)[\w ®™-]{0,40}?(?:Thermal ?Cycler|Thermocycler|PCR System|C1000[\w ]*|T100[\w ]*))', 1),
+        ('trim_param', r'(\d+\s*bp sliding window[^.]{0,80})', 1),
+        ('min_len_cutoff', r'(?:retain|keep)\w* reads (?:between|of)\s*(\d+)\s*[–-]', 1),
+        ('merge_min_overlap', r'minimum\s*(\d+)\s*bp\s*overlap', 1),
+        ('chimera_check_method', r'(--uchime3?_denovo|uchime3?_denovo|removeBimeraDenovo|--uchime_ref)', 1),
+        ('demux_tool', r'(demultiplex[^.]{0,200})', 1),
+        ('tax_class_collapse', r'((?:Majority )?Lowest Common Ancestor.{0,400}?agree[^.]{0,60})', 1),
+        ('tax_class_other', r'([^.]{0,80}cannot be assigned below [^.]{0,80})', 1),
+        ('error_rate_cutoff', r'Phred score of Q(\d+)', 1),
+    ]
+    for key, pat, g in rules:          # protocol wording is specific: these replace the general reader's guesses
+        m = re.search(pat, flat, re.I | re.S)
+        if m: meta[key] = norm(m.group(g))[:400]; ev[key] = norm(m.group(0))[:400]
+    cc = _pcr_block(prose, r'Contamination control|thresholds?\b|limit of detection', r'Section \d|Protocol references|References')
+    if cc: meta['screen_contam_method'] = norm(re.sub(r'^\d+\s+', '', cc))[:500]; ev['screen_contam_method'] = norm(cc)[:400]
+    if meta.get('error_rate_cutoff') and meta.get('trim_method'):
+        meta.setdefault('error_rate_tool', meta['trim_method']); ev.setdefault('error_rate_tool', ev.get('error_rate_cutoff'))
+    if meta.get('min_len_cutoff') and meta.get('trim_method'):
+        meta.setdefault('min_len_tool', meta['trim_method']); ev.setdefault('min_len_tool', ev.get('min_len_cutoff'))
+    pm = [norm(x) for x in prose.split('\n') if re.search(r'MID tag|multiplex identifier|heterogeneity spacer|inhibit|dilut\w* 1:\d+|nested', x, re.I)]
+    if pm: meta['pcr_method_additional'] = ' '.join(pm[:4])[:600]; ev['pcr_method_additional'] = meta['pcr_method_additional']
+    if meta.get('thermocycler') and not meta.get('pcr2_thermocycler') and meta.get('pcr2_cond'):
+        meta['pcr2_thermocycler'] = meta['thermocycler']; ev['pcr2_thermocycler'] = ev.get('thermocycler')
+    for k in ASSAY_TERMS:                # assay-level terms read from the protocol apply to every assay
+        if meta.get(k):
+            for a in meta['assays']:
+                if not a.get(ASSAY_KEY.get(k, k)):
+                    a[ASSAY_KEY.get(k, k)] = meta[k]; ev[f'{a["marker"]}.{ASSAY_KEY.get(k, k)}'] = ev.get(k)
+    lq = _pcr_block(prose, r'Library Quantification|Library pooling|Quantif\w+ (?:and|&) Pooling', r'Section \d|Step [5-9]|Sequencing')
+    if lq:
+        bits = [norm(x) for x in re.split(r'\n', lq) if re.search(r'Qubit|qPCR|Bioanalyzer|TapeStation|\bnM\b|Quant', x)]
+        if bits: meta['lib_screen'] = '; '.join(re.sub(r'^\d+\.\s*', '', b).rstrip('.') for b in bits); ev['lib_screen'] = norm(lq)[:400]
+    st = [norm(x) for x in prose.split('\n') if re.search(r'wip\w*|soak\w*|rins\w*', x, re.I) and re.search(r'bleach|ethanol|lipsol|Virkon|DNA[- ]?away|UV', x, re.I)]
+    if st: meta['sterilise_method'] = ' '.join(st[:3])[:600]; ev['sterilise_method'] = meta['sterilise_method']
+    if meta.get('error_rate_cutoff'): meta['error_rate_type'] = 'Phred score'; ev['error_rate_type'] = ev['error_rate_cutoff']
+    cl = re.search(r'--cluster_unoise|unoise3?\b|--cluster_size|--cluster_fast|swarm', flat, re.I)
+    if cl:
+        meta['otu_clust_tool'] = ('VSEARCH ' if re.search(r'vsearch', flat, re.I) else '') + cl.group(0)
+        ev['otu_clust_tool'] = norm(flat[max(0, cl.start() - 100): cl.end() + 60])
+    mr = re.search(r'fewer than\s+(\w+)\s+reads', flat, re.I)
+    if mr and num_word(mr.group(1)):
+        meta['min_reads_cutoff'], meta['min_reads_cutoff_unit'] = str(num_word(mr.group(1))), 'reads'; ev['min_reads_cutoff'] = norm(mr.group(0))
+    if meta.get('min_reads_cutoff') and re.search(r'vsearch', flat, re.I):
+        meta.setdefault('min_reads_tool', 'VSEARCH'); ev.setdefault('min_reads_tool', ev.get('min_reads_cutoff'))
+    if doi:
+        url = 'https://doi.org/' + doi if not doi.startswith('http') else doi
+        for k in ('nucl_acid_amp', 'nucl_acid_ext', 'sop_bioinformatics'):
+            meta[k] = url if k != 'sop_bioinformatics' or not meta.get(k) else f'{meta[k]}; {url}'
+            ev[k] = f'{label}: {url}'
+    meta['_label'] = label
+    return meta
+
+
+def protocol_from_url(url: str) -> dict:
+    doi = re.search(r'10\.17504/protocols\.io\.[a-z0-9]+(?:/v\d+)?', url)
+    if doi:
+        slug = doi.group(0)
+    view = url if 'protocols.io/view/' in url else None
+    if not view:   # resolve the DOI to its protocols.io page
+        import urllib.request
+        try:
+            with urllib.request.urlopen(urllib.request.Request('https://doi.org/' + slug, method='HEAD'), timeout=30) as r:
+                view = r.geturl()
+        except Exception:
+            view = None
+        if view is None and ('https://doi.org/' + slug) in FETCH_OVERRIDES:
+            view = FETCH_OVERRIDES['https://doi.org/' + slug].decode()
+    if not view: raise RuntimeError(f'could not resolve {url} to a protocols.io page')
+    pdf = re.sub(r'(\?.*)?$', '', view).rstrip('/')
+    pdf = pdf if pdf.endswith('.pdf') else pdf + '.pdf'
+    data = fetch(pdf)
+    text = _pdf_bytes_text(data) if data[:4] == b'%PDF' else data.decode('utf-8', 'replace')
+    d = re.search(r'10\.17504/protocols\.io\.[a-z0-9]+(?:/v\d+)?', text)
+    return read_protocol_text(text, 'protocols.io', d.group(0) if d else (doi.group(0) if doi else None))
+
+
+def _pdf_bytes_text(data: bytes) -> str:
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / 'doc.pdf'; p.write_bytes(data)
+        return extract_report_text(p)
+
+
+# ── dataset records (DataCite: Zenodo, Dryad, Figshare, …) ──────────────────
+
+def read_datacite(doi: str) -> dict:
+    doi = re.search(r'10\.\d{4,5}/[^\s?#]+', doi).group(0)
+    d = fetch_json(f'https://api.datacite.org/dois/{doi}?affiliation=true')['data']['attributes']
+    creators = d.get('creators') or []
+    names, orcids, affs = [], [], {}
+    for c in creators:
+        nm = ' '.join(x for x in (c.get('givenName'), c.get('familyName')) if x) or c.get('name')
+        names.append(nm)
+        oid = next((i['nameIdentifier'] for i in c.get('nameIdentifiers') or [] if 'ORCID' in (i.get('nameIdentifierScheme') or '')), None)
+        if oid: orcids.append(oid if oid.startswith('http') else f'https://orcid.org/{oid}')
+        for a in c.get('affiliation') or []:
+            nm_a = a.get('name') if isinstance(a, dict) else a
+            ror = a.get('affiliationIdentifier') if isinstance(a, dict) else None
+            if nm_a: affs.setdefault(nm_a, [0, ror])[0] += 1
+    out = {'_label': f'dataset record {doi}', 'doi': doi}
+    if names: out['recorded_by'] = ' | '.join(names)
+    if orcids and len(orcids) == len(names): out['recorded_by_id'] = ' | '.join(orcids)
+    elif orcids: out['recorded_by_id_partial'] = ' | '.join(orcids)
+    if affs:
+        top = max(affs.items(), key=lambda kv: kv[1][0])
+        out['institution'] = top[0]
+        if top[1][1] and 'ror.org' in str(top[1][1]): out['institution_ror'] = top[1][1]
+    rights = d.get('rightsList') or []
+    if rights:
+        r = rights[0]
+        lic = r.get('rights') or r.get('rightsIdentifier')
+        out['license'] = lic + (f" ({r['rightsUri']})" if r.get('rightsUri') else '')
+        out['access_rights'] = 'open access' if re.search(r'creative commons|cc-?by|cc0|open', lic or '', re.I) else None
+    out['title'] = (d.get('titles') or [{}])[0].get('title')
+    out['related'] = [r.get('relatedIdentifier') for r in d.get('relatedIdentifiers') or []]
+    out['funder'] = ' | '.join(f.get('funderName') for f in d.get('fundingReferences') or [] if f.get('funderName')) or None
+    out['url'] = d.get('url')
+    out['_evidence'] = {k: f'DataCite record {doi}: {k}' for k in out if not k.startswith('_')}
+    return out
+
+
+# ── code repositories and dataset files ──────────────────────────────────────
+
+DATA_EXT = ('.csv', '.tsv', '.txt')
+CODE_EXT = ('.r', '.py', '.sh', '.smk', '.nf', '.yaml', '.yml', '.config', '.cfg', '.ini', '.json')
+
+
+def read_github(url: str) -> dict:
+    m = re.search(r'github\.com/([^/\s]+)/([^/\s#?]+)', url)
+    owner, repo = m.group(1), m.group(2).removesuffix('.git')
+    info = fetch_json(f'https://api.github.com/repos/{owner}/{repo}')
+    branch = info.get('default_branch') or 'main'
+    tree = fetch_json(f'https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1').get('tree') or []
+    files = {}
+    for t in tree:
+        p = t.get('path', '')
+        if t.get('type') != 'blob' or (t.get('size') or 0) > 5_000_000: continue
+        if p.lower().endswith(DATA_EXT + CODE_EXT) or re.match(r'readme', Path(p).name, re.I):
+            try: files[p] = fetch(f'https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{p}')
+            except RuntimeError: pass
+    return {'_label': f'GitHub {owner}/{repo}', 'code_repo': f'https://github.com/{owner}/{repo}', 'files': files,
+            'license': (info.get('license') or {}).get('name')}
+
+
+def read_zenodo(ref: str) -> dict:
+    rid = re.search(r'zenodo\.(\d+)|records?/(\d+)', ref)
+    rid = rid.group(1) or rid.group(2)
+    out = {'_label': f'Zenodo {rid}', 'files': {}}
+    try: out.update({k: v for k, v in read_datacite(f'10.5281/zenodo.{rid}').items() if k not in ('_label',)})
+    except Exception as e: out['_error'] = str(e)
+    try:
+        entries = fetch_json(f'https://zenodo.org/api/records/{rid}/files').get('entries') or []
+    except Exception as e:
+        entries = []; out['_error'] = str(e)
+    out['file_list'] = [(e.get('key'), e.get('size'), e.get('checksum')) for e in entries]
+    for e in entries:
+        key, size = e.get('key') or '', e.get('size') or 0
+        url = (e.get('links') or {}).get('content') or f'https://zenodo.org/api/records/{rid}/files/{key}/content'
+        if size > 20_000_000: continue
+        if key.lower().endswith('.zip'):
+            try: out['files'].update(unzip_bytes(fetch(url), prefix=key))
+            except RuntimeError: pass
+        elif key.lower().endswith(DATA_EXT + CODE_EXT):
+            try: out['files'][key] = fetch(url)
+            except RuntimeError: pass
+    return out
+
+
+def unzip_bytes(data: bytes, prefix='') -> dict:
+    files = {}
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for n in z.namelist():
+            if n.endswith('/') or '__MACOSX' in n: continue
+            if n.lower().endswith(DATA_EXT + CODE_EXT) or re.match(r'readme', Path(n).name, re.I):
+                if z.getinfo(n).file_size <= 10_000_000: files[f'{prefix}/{n}'] = z.read(n)
+    return files
+
+
+def read_sra(acc: str) -> dict:
+    fields = 'run_accession,library_name,sample_alias,sample_accession,instrument_model,library_layout,read_count,fastq_ftp,fastq_md5'
+    tsv = fetch(f'https://www.ebi.ac.uk/ena/portal/api/search?result=read_run&query=study_accession={acc}&fields={fields}').decode('utf-8')
+    rows = list(csv.DictReader(io.StringIO(tsv), delimiter='\t'))
+    return {'_label': f'ENA/SRA {acc}', 'accession': acc, 'runs': rows}
+
+
+# ── understanding data tables ────────────────────────────────────────────────
+
+def parse_table(name: str, data: bytes):
+    raw = data.decode('utf-8-sig', errors='replace')
+    if not raw.strip(): return None
+    try: dialect = csv.Sniffer().sniff(raw[:5000], delimiters=',;\t')
+    except csv.Error: dialect = csv.excel_tab if name.lower().endswith('.tsv') else csv.excel
+    rows = [r for r in csv.reader(io.StringIO(raw), dialect) if any(c.strip() for c in r)]
+    return rows if len(rows) >= 2 and len(rows[0]) >= 2 else None
+
+
+def table_kind(rows) -> str:
+    hdr = [h.strip().lower() for h in rows[0]]
+    body = rows[1:]
+    if len(hdr) == 2 and re.search(r'blank|control|neg', hdr[0]) and re.search(r'sample', hdr[1]): return 'blank_links'
+    numeric = lambda v: re.fullmatch(r'-?\d+(\.\d+)?', v.strip() or 'x') is not None
+    num_cols = sum(1 for j in range(1, len(hdr)) if all(numeric(r[j]) for r in body[:50] if j < len(r) and r[j].strip()))
+    if num_cols >= 5 and num_cols >= 0.6 * (len(hdr) - 1):
+        vals = {r[j].strip() for r in body[:50] for j in range(1, len(r)) if j < len(r) and numeric(r[j])}
+        return 'presence' if vals <= {'0', '1'} else 'reads'
+    if any(re.fullmatch(SAMPLE_ALIASES['samp_name'], h, re.I) for h in hdr) and \
+       sum(1 for h in hdr if re.search(r'date|time|lat|lon|site|habitat|type|volume|depth|location', h)) >= 2: return 'samples'
+    return 'other'
+
+
+def matrix_from(rows):
+    """{'samples': [...], 'taxa': [{'label', 'taxonomy', 'counts': {sample: n}}]} – taxa as rows or as columns."""
+    hdr = [h.strip() for h in rows[0]]
+    tax_col = next((j for j, h in enumerate(hdr) if re.fullmatch(r'taxonomy|lineage|taxon_?path|classification', h, re.I)), None)
+    seq_col = next((j for j, h in enumerate(hdr) if re.fullmatch(r'sequence|seq|dna_sequence|asv_sequence', h, re.I)), None)
+    cols = [j for j in range(1, len(hdr)) if j not in (tax_col, seq_col)]
+    taxa = []
+    for r in rows[1:]:
+        if not r or not r[0].strip(): continue
+        counts = {}
+        for j in cols:
+            if j < len(r) and re.fullmatch(r'\d+(\.\d+)?', r[j].strip() or 'x'): counts[hdr[j]] = float(r[j])
+        taxa.append({'label': r[0].strip(), 'taxonomy': r[tax_col].strip() if tax_col is not None and tax_col < len(r) else '',
+                     'sequence': r[seq_col].strip() if seq_col is not None and seq_col < len(r) else '', 'counts': counts})
+    return {'samples': [hdr[j] for j in cols], 'taxa': taxa}
+
+
+RANKS = [('kingdom', 'k'), ('phylum', 'p'), ('class', 'c'), ('order', 'o'), ('family', 'f'), ('genus', 'g'), ('species', 's')]
+
+
+def taxonomy_fields(label: str, taxonomy: str) -> dict:
+    """'d__Eukaryota; p__Chordata; …; s__Rana_temporaria' (or 'Animalia;Chordata;…') -> FAIRe taxa columns."""
+    out = {}
+    parts = [p.strip() for p in re.split(r'[;|]', taxonomy or '') if p.strip()]
+    if parts and re.match(r'[a-z]__', parts[0]):
+        for p in parts:
+            code, name = p.split('__', 1)
+            name = name.replace('_', ' ').strip()
+            rank = {'d': None, 'k': 'kingdom', 'p': 'phylum', 'c': 'class', 'o': 'order', 'f': 'family', 'g': 'genus', 's': 'species'}.get(code)
+            if rank and name and not re.match(r'(unassigned|unknown|NA)$', name, re.I): out[rank] = name
+    elif len(parts) >= 3:
+        for (rank, _), name in zip(RANKS, parts):
+            if name and not re.match(r'(unassigned|unknown|NA)$', name, re.I): out[rank] = name.replace('_', ' ')
+    if 'kingdom' not in out and out.get('phylum') in ('Chordata', 'Arthropoda', 'Mollusca', 'Annelida', 'Cnidaria'): out['kingdom'] = 'Animalia'
+    sp = out.pop('species', None) or (label.replace('_', ' ') if re.fullmatch(r'[A-Z][a-z]+[_ ][a-z]+', label) else None)
+    rec = {k: out.get(k) for k, _ in RANKS[:-1]}
+    if sp:
+        rec['genus'] = rec.get('genus') or sp.split()[0]
+        rec['specificEpithet'] = sp.split()[1] if len(sp.split()) > 1 else None
+        rec['scientificName'], rec['taxonRank'] = sp, 'species'
+    else:
+        deepest = next(((k, out[k]) for k, _ in reversed(RANKS[:-1]) if out.get(k)), None)
+        if deepest: rec['scientificName'], rec['taxonRank'] = deepest[1], deepest[0]
+        else: rec['scientificName'], rec['taxonRank'] = label.replace('_', ' '), None
+    rec['verbatimIdentification'] = taxonomy or label
+    return {k: v for k, v in rec.items() if v}
+
+
+# ── putting the sources together ─────────────────────────────────────────────
+
+PREFER_SOURCE = {  # which source wins when sources disagree
+    'protocols.io': METHOD_TERMS | {'sterilise_method', 'pcr_cond', 'custom_mm', 'pcr_rep', 'trim_param', 'demux_tool', 'merge_tool',
+                                    'merge_min_overlap', 'min_len_cutoff', 'chimera_check_method', 'otu_clust_tool', 'min_reads_cutoff',
+                                    'screen_contam_method', 'tax_class_collapse', 'otu_seq_comp_appr', 'nucl_acid_ext_sep',
+                                    'nucl_acid_ext_lysis', 'pcr2_commercial_mm', 'pcr2_custom_mm', 'pcr2_cond', 'pcr2_amplificationReactionVolume',
+                                    'pcr2_dna_vol', 'thermocycler', 'lib_screen', 'seq_kit'},
+    'dataset': {'recordedByID', 'license', 'institution', 'institutionID', 'accessRights', 'rightsHolder'},
+}
+
+
+def merge_source(meta: dict, other: dict, label: str, prefer: set) -> dict:
+    """Fill gaps from another source and settle disagreements (preferred terms take the other source's value)."""
+    mine = {it['id']: it for it in review_items(meta)}
+    if not meta.get('assays') and other.get('assays'):
+        meta['assays'] = [dict(a) for a in other['assays']]
+        for k, v in (other.get('_evidence') or {}).items():
+            if re.match(r'[A-Za-z0-9]+\.', k): meta.setdefault('_evidence', {}).setdefault(k, v)
+        mine = {it['id']: it for it in review_items(meta)}
+    m_of = {a.get('marker'): i for i, a in enumerate(meta.get('assays') or [])}
+    edits, filled, overridden, agreed = {}, 0, 0, 0
+    for it in review_items(other):
+        if it['generated'] or not it['value'] or it['value'].startswith(('missing:', 'not applicable')): continue
+        lid = it['id']
+        if it['scope'] == 'assay':
+            mk = (other.get('assays') or [])[int(lid.split(':')[1])].get('marker')
+            if mk not in m_of: continue
+            lid = f'assay:{m_of[mk]}:{it["term"]}'
+        if lid not in mine: continue
+        ours, theirs = mine[lid]['value'], it['value']
+        ev = f'{label}: ' + (it.get('evidence') or '')[:300]
+        if not ours or ours.startswith('missing:'):
+            edits[lid] = theirs; filled += 1
+            _flag(meta, lid, 'ok', f'from {label}', origin=label, evidence=ev)
+        elif same_value(ours, theirs):
+            agreed += 1; _flag(meta, lid, 'ok', f'{label} agrees')
+        elif it['term'] in prefer:
+            edits[lid] = theirs; overridden += 1
+            _flag(meta, lid, 'check', f'taken from {label}; the report says "{ours[:80]}"', origin=label, evidence=ev)
+        else:
+            _flag(meta, lid, 'check', f'{label} says "{theirs[:80]}"')
+    apply_review(meta, edits)
+    meta.setdefault('notes', []).append(f'{label}: filled {filled} value(s), replaced {overridden}, agreed on {agreed}.')
+    meta.setdefault('_sources', []).append(label)
+    return meta
+
+
+def apply_dataset_record(meta: dict, rec: dict):
+    """DataCite metadata (Zenodo/Dryad/Figshare): authors with ORCIDs, licence, custodian institution."""
+    label = rec.get('_label') or 'dataset record'
+    edits = {}
+    pairs = [('recordedBy', rec.get('recorded_by'), False), ('recordedByID', rec.get('recorded_by_id'), True),
+             ('license', rec.get('license'), True), ('accessRights', rec.get('access_rights'), True),
+             ('institution', rec.get('institution'), True), ('institutionID', rec.get('institution_ror'), True)]
+    cur = {it['id']: it['value'] for it in review_items(meta)}
+    for term, val, prefer in pairs:
+        if not val: continue
+        lid = f'project:{term}'
+        ours = cur.get(lid, '')
+        if not ours or ours.startswith('missing:'):
+            edits[lid] = val; _flag(meta, lid, 'ok', f'from {label}', origin=label, evidence=f'{label}: {term}')
+        elif same_value(ours, val): _flag(meta, lid, 'ok', f'{label} agrees')
+        elif prefer:
+            edits[lid] = val; _flag(meta, lid, 'check', f'taken from {label}; the report says "{ours[:80]}"', origin=label, evidence=f'{label}: {term}')
+        else: _flag(meta, lid, 'check', f'{label} says "{val[:80]}"')
+    if rec.get('institution') and not rec.get('institution_ror') and rec['institution'] != cur.get('project:institution'):
+        edits['project:institutionID'] = ''           # the old ROR belonged to the replaced institution
+    doi = rec.get('doi')
+    if doi:
+        assoc = (meta.get('associated_resource') or '')
+        if doi not in assoc: meta['associated_resource'] = ' | '.join(x for x in (assoc, f'https://doi.org/{doi}') if x)
+    apply_review(meta, edits)
+    meta.setdefault('_sources', []).append(label)
+
+
+def apply_files(meta: dict, files: dict, label: str):
+    """Data tables and code from a repository / archive / local files."""
+    tables = {}
+    for name, data in sorted(files.items(), key=lambda kv: not re.match(r'readme', Path(kv[0]).name, re.I)):
+        if re.match(r'readme', Path(name).name, re.I): CONTROL_CODES.update(control_codes_from(data.decode('utf-8', 'replace')))
+        if name.lower().endswith(DATA_EXT):
+            rows = parse_table(name, data)
+            if rows: tables[name] = (table_kind(rows), rows)
+    reads = [(n, matrix_from(r)) for n, (k, r) in tables.items() if k == 'reads']
+    pres = [(n, matrix_from(r)) for n, (k, r) in tables.items() if k == 'presence']
+    samples = [(n, r) for n, (k, r) in tables.items() if k == 'samples']
+    links = [(n, r) for n, (k, r) in tables.items() if k == 'blank_links']
+    notes = []
+    if reads:
+        name, mx = max(reads, key=lambda x: len(x[1]['taxa']))
+        meta['_read_matrix'] = mx
+        meta['taxa_raw'] = [dict(seq_id=t['label'], dna_sequence=t['sequence'] or None, **taxonomy_fields(t['label'], t['taxonomy']))
+                            for t in mx['taxa']]
+        meta['otu_raw_file'] = name
+        if not meta.get('otu_raw_description') or 'quality filtering' in meta.get('otu_raw_description', ''):
+            meta['otu_raw_description'] = f'Taxon × sample read table before filtering ({Path(name).name})'
+            meta.setdefault('_evidence', {})['otu_raw_description'] = f'{label}: {name}'
+        notes.append(f'taxaRaw: {len(mx["taxa"])} taxa from {name}' + ('' if any(t['sequence'] for t in mx['taxa']) else ' (no sequences in the file)'))
+    if samples:
+        name, rows = max(samples, key=lambda x: len(x[1]))
+        hdr = [h.strip() for h in rows[0]]
+        recs = [dict(zip(hdr, r)) for r in rows[1:]]
+        in_matrix = set(meta['_read_matrix']['samples']) if meta.get('_read_matrix') else None
+        sid = next(h for h in hdr if re.fullmatch(SAMPLE_ALIASES['samp_name'], h, re.I))
+        if in_matrix:
+            keep = [r for r in recs if r.get(sid, '').strip() in in_matrix]
+            extra = sorted(in_matrix - {r.get(sid, '').strip() for r in recs})
+            recs = keep + [{sid: s} for s in extra]           # controls and replicates only in the read table
+            notes.append(f'{len(keep)} samples from {name} matched the read table; {len(extra)} more (mostly controls) taken from the read table')
+        for r in recs:
+            if r.get('date') and r.get('time') and re.match(r'\d', r['time']):
+                d = parse_date(r['date']) or r['date']
+                r['date'] = f'{d}T{r["time"][:5]}'; r.pop('time')
+        meta['sample_list'] = recs
+        meta['sample_list_source'] = name
+    elif meta.get('_read_matrix'):
+        meta['sample_list'] = [{'sample': s} for s in meta['_read_matrix']['samples']]
+    if links:
+        name, rows = links[0]
+        rel = {}
+        for b, s in rows[1:]:
+            if b.strip() != s.strip(): rel.setdefault(s.strip(), []).append(b.strip())
+        meta['_blank_links'] = rel
+        notes.append(f'control–sample links from {name}')
+    if pres:
+        name, mx = max(pres, key=lambda x: len(x[1]['taxa']))
+        sample_set = set(meta.get('_read_matrix', {}).get('samples', []))
+        cols = [s for s in mx['samples'] if not sample_set or s in sample_set]
+        if len(cols) < 3 and len(mx['taxa']) and sample_set:      # samples as rows, taxa as columns
+            rows_ = tables[name][1]
+            taxa_cols = rows_[0][1:]
+            kept = {t for r in rows_[1:] if r and r[0].strip() in sample_set for t, v in zip(taxa_cols, r[1:]) if v.strip() == '1'}
+        else:
+            kept = {t['label'] for t in mx['taxa'] if any(t['counts'].get(c) for c in cols)}
+        raw = {t['seq_id']: t for t in meta.get('taxa_raw') or []}
+        meta['taxa_final'] = [raw.get(k) or dict(seq_id=k, **taxonomy_fields(k, '')) for k in sorted(kept)]
+        for a in meta.get('assays') or []:
+            a.setdefault('otu_final_description', f'Presence–absence table after filtering ({Path(name).name})')
+        notes.append(f'taxaFinal: {len(kept)} taxa from {name}')
+    for n, d in files.items():
+        if re.match(r'readme', Path(n).name, re.I): CONTROL_CODES.update(control_codes_from(d.decode('utf-8', 'replace')))
+    if CONTROL_CODES: notes.append('control naming: ' + ', '.join(f'{k} = {v}' for k, v in CONTROL_CODES.items()))
+    code = {n: d.decode('utf-8', 'replace') for n, d in files.items() if n.lower().endswith(CODE_EXT) or re.match(r'readme', Path(n).name, re.I)}
+    if code:
+        txt = '\n'.join(code.values())
+        hints = []
+        for pat, what in ((r'filterAndTrim\([^)]*maxEE\s*=\s*c?\(?([\d., ]+)', 'maxEE'), (r'truncLen\s*=\s*c?\(?([\d, ]+)', 'truncLen'),
+                          (r'minBoot\s*=\s*(\d+)', 'minBoot'), (r'--cluster_unoise|--minsize\s+\d+|--uchime3?_denovo', None)):
+            m = re.search(pat, txt)
+            if m: hints.append(f'{what} = {m.group(1).strip()}' if what else m.group(0))
+        if hints: meta.setdefault('bioinfo_method_additional', None); notes.append('settings seen in the code: ' + '; '.join(hints))
+    for n in notes: meta.setdefault('notes', []).append(f'{label}: {n}')
+    meta.setdefault('_sources', []).append(label)
+
+
+def apply_sra(meta: dict, rec: dict):
+    runs = rec.get('runs') or []
+    if not runs: return
+    label = rec['_label']
+    names = {str(s.get('samp_name') or s.get('sample') or '') for s in meta.get('sample_list') or []}
+    per_sample = {r['sample_alias']: r for r in runs if r.get('sample_alias') in names} or \
+                 {r['library_name']: r for r in runs if r.get('library_name') in names}
+    meta['sra_runs'] = runs
+    meta['sra_by_sample'] = per_sample
+    meta['sra_by_library'] = {r.get('library_name'): r for r in runs if r.get('library_name')}
+    inst = runs[0].get('instrument_model')
+    edits = {}
+    cur = {it['id']: it['value'] for it in review_items(meta)}
+    for term, val in (('instrument', inst), ('platform', 'ILLUMINA' if re.search(r'illumina|miseq|novaseq|nextseq|hiseq', inst or '', re.I) else None),
+                      ('lib_layout', {'PAIRED': 'paired end', 'SINGLE': 'single end'}.get((runs[0].get('library_layout') or '').upper())),
+                      ('checksum_method', 'MD5' if runs[0].get('fastq_md5') else None)):
+        if val and (not cur.get(f'project:{term}') or cur[f'project:{term}'].startswith('missing')):
+            edits[f'project:{term}'] = val; _flag(meta, f'project:{term}', 'ok', f'from {label}', origin=label, evidence=f'{label}: {term}')
+        elif val: _flag(meta, f'project:{term}', 'ok' if same_value(val, cur.get(f'project:{term}', '')) else 'check', f'{label}: {val}')
+    apply_review(meta, edits)
+    acc = rec.get('accession')
+    if acc and acc not in (meta.get('associated_resource') or ''):
+        meta['associated_resource'] = ' | '.join(x for x in (meta.get('associated_resource'), f'https://www.ncbi.nlm.nih.gov/bioproject/{acc}') if x)
+    if not per_sample:
+        meta.setdefault('notes', []).append(
+            f'{label}: {len(runs)} sequencing runs are pooled libraries ({", ".join(sorted(r.get("library_name") or r["run_accession"] for r in runs)[:6])}…), '
+            'not one run per sample. Add a "library" (or seq_run_id) column to the sample list to link samples to their run files.')
+    meta.setdefault('_sources', []).append(label)
+
+
+def add_sources(meta: dict, sources: list, report_text: str = '', follow_links: bool = False) -> dict:
+    """Read every extra source and merge it into the report's metadata. Problems become notes, never errors."""
+    todo = list(sources or [])
+    code_only = set()
+    if follow_links and report_text:
+        found = find_links(report_text)
+        avail = ' '.join(_squash(x) for x in sentences(report_text) if re.search(r'data availab|available (?:via|at|on|from|in)|deposited|archived|accession', x, re.I)).lower()
+        for f in found:
+            if 'github.com' in f and f.split('github.com/')[-1].lower()[:20] not in avail: code_only.add(f)   # e.g. a pipeline's repo
+        todo += [f for f in found if f not in todo]
+        if found: meta.setdefault('notes', []).append('Links found in the report: ' + ', '.join(found))
+    seen_github = set()
+    for src in todo:
+        kind = classify(src)
+        try:
+            if kind in ('protocol', 'file:protocol'):
+                if kind == 'protocol': proto = protocol_from_url(src)
+                else:
+                    ptxt = extract_report_text(src)
+                    d = re.search(r'10\.17504/protocols\.io\.[a-z0-9]+(?:/v\d+)?', ptxt)
+                    proto = read_protocol_text(ptxt, 'protocols.io' if d else Path(src).name, d.group(0) if d else None)
+                merge_source(meta, proto, proto.get('_label') or 'protocol', PREFER_SOURCE['protocols.io'])
+                for k in ('pcr2_amplificationReactionVolume', 'pcr2_dna_vol', 'pcr2_commercial_mm', 'pcr2_custom_mm', 'pcr2_cond',
+                          'thermocycler', 'pcr2_annealingTemp', 'pcr2_cycles', 'pcr2_thermocycler', 'nucl_acid_ext', 'nucl_acid_amp'):
+                    if proto.get(k) and not meta.get(k):
+                        meta[k] = proto[k]; meta.setdefault('_evidence', {})[k] = proto['_evidence'].get(k)
+            elif kind == 'zenodo':
+                z = read_zenodo(src)
+                apply_dataset_record(meta, z)
+                if z.get('files'): apply_files(meta, z['files'], z['_label'])
+                big = [k for k, s, _ in z.get('file_list', []) if (s or 0) > 20_000_000]
+                if big: meta.setdefault('notes', []).append(f'{z["_label"]}: large files not downloaded: ' + ', '.join(big))
+            elif kind == 'doi':
+                apply_dataset_record(meta, read_datacite(src))
+            elif kind == 'github':
+                if src in seen_github: continue
+                seen_github.add(src)
+                if src in code_only:
+                    if src not in (meta.get('code_repo') or ''): meta['code_repo'] = ' | '.join(x for x in (meta.get('code_repo'), src) if x)
+                    continue
+                g = read_github(src)
+                if g.get('code_repo') and g['code_repo'] not in (meta.get('code_repo') or ''):
+                    meta['code_repo'] = ' | '.join(x for x in (meta.get('code_repo'), g['code_repo']) if x)
+                apply_files(meta, g['files'], g['_label'])
+            elif kind == 'sra':
+                apply_sra(meta, read_sra(src))
+            elif kind == 'file:data':
+                p = Path(src)
+                if p.suffix.lower() == '.xlsx':
+                    rows = read_table(p); hdr = list(rows[0]) if rows else []
+                    data = '\n'.join(','.join(f'"{str(r.get(h, ""))}"' for h in hdr) for r in rows)
+                    apply_files(meta, {p.name: (','.join(hdr) + '\n' + data).encode()}, p.name)
+                else: apply_files(meta, {p.name: p.read_bytes()}, p.name)
+            elif kind == 'file:code':
+                apply_files(meta, {Path(src).name: Path(src).read_bytes()}, Path(src).name)
+            elif kind == 'file:zip':
+                apply_files(meta, unzip_bytes(Path(src).read_bytes(), Path(src).stem), Path(src).name)
+            else:
+                meta.setdefault('notes', []).append(f'Not sure what "{src}" is – skipped.')
+        except Exception as e:
+            meta.setdefault('notes', []).append(f'Could not use {src}: {e}')
+    return meta
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  7. Google Colab: a point-and-click review screen (used by the notebook)
 # ════════════════════════════════════════════════════════════════════════════
 
 _COLAB: dict = {}
@@ -3311,7 +4148,8 @@ def _esc(t):
     return html.escape(str(t or ''))
 
 
-def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_confidential=False, use_a_sample_list=False):
+def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_confidential=False, use_a_sample_list=False,
+               extra_sources='', read_links_in_the_report=False):
     """Notebook step: upload a report, read it, and show the review screen with a Fill button."""
     from google.colab import files as colab_files
     from IPython.display import display, HTML
@@ -3346,7 +4184,10 @@ def colab_read(use_my_own_template=False, use_a_profile=False, report_is_not_con
             from getpass import getpass
             key = getpass('Claude API key: ').strip()
     text = extract_report_text(report)
-    meta = prepare(text, profile, None, samples)
+    srcs = [x for x in re.split(r'[\s,;]+', extra_sources or '') if x]
+    if srcs or read_links_in_the_report:
+        display(HTML('<div class="fx">Reading the extra sources (public links only)…</div>'))
+    meta = prepare(text, profile, None, samples, srcs, read_links_in_the_report)
     if key:
         try: second_opinion(meta, facts_from_claude(parse_with_claude(text, key), text), 'Claude')
         except Exception as e: meta['notes'].append(f'Claude could not be used ({e}).')
@@ -3438,17 +4279,22 @@ def colab_fill(edits=None, save_profile=False, profile_name='my FAIRe profile'):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  7. Running the tool: local web page or command line
+#  8. Running the tool: local web page or command line
 # ════════════════════════════════════════════════════════════════════════════
 
 REPORT_TYPES = ('.doc', '.docx', '.pdf', '.txt')
 
 
-def prepare(text: str, profile: dict | None = None, local_ai: str | None = None, samples=None) -> dict:
+def prepare(text: str, profile: dict | None = None, local_ai: str | None = None, samples=None, sources=None, follow_links=False) -> dict:
     """Built-in reader + primer library + your profile (+ optional local AI second opinion, + optional sample list)."""
+    CONTROL_CODES.clear()
     meta = parse_report_regex(text)
     if samples: meta['sample_list'] = read_table(samples) if isinstance(samples, (str, Path)) else list(samples)
     apply_library(meta)
+    if sources or follow_links:
+        user_list = meta.get('sample_list')
+        add_sources(meta, sources or [], text, follow_links)
+        if user_list: meta['sample_list'] = user_list   # your own sample list wins over files found online
     if profile: apply_profile(meta, profile)
     if local_ai:
         try: local_ai_opinion(meta, text, None if local_ai is True else local_ai)
@@ -3484,13 +4330,14 @@ def read_review_csv(path) -> dict:
     return edits
 
 
-def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=None, profile=None, local_ai=None, edits=None, samples=None) -> dict:
+def process_report(report_path, template_path=None, out_dir=OUTPUT_DIR, name=None, profile=None, local_ai=None, edits=None, samples=None,
+                   sources=None, follow_links=False) -> dict:
     """Read one report, fill the template, and write <name>_FAIRe.xlsx plus <name>_review.csv into out_dir.
     The review CSV lists what needs checking first; put corrections in its 'your_value' column and run again with --edits."""
     report_path, out_dir = Path(report_path), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     text = extract_report_text(report_path)
-    meta = prepare(text, profile, local_ai, samples)
+    meta = prepare(text, profile, local_ai, samples, sources, follow_links)
     if edits:
         apply_review(meta, edits)
         for k in edits: meta.setdefault('_auto', {})[k] = {'level': 'ok', 'reasons': ['your correction'], 'origin': 'user'}
@@ -3543,6 +4390,11 @@ def main(argv=None):
     p.add_argument('-t', '--template', help='FAIRe template to fill (default: the bundled FULL template)')
     p.add_argument('-o', '--out', default=str(OUTPUT_DIR), help='folder for the filled workbooks (default: outputs/)')
     p.add_argument('--profile', help='apply a saved profile of corrections (JSON)')
+    p.add_argument('--source', action='append', default=[], metavar='LINK_OR_FILE',
+                   help='extra source: protocols.io link/DOI, Zenodo/Dryad/Figshare DOI, GitHub repo, BioProject (PRJNA…), or a local '
+                        'protocol PDF / data table / code file. Repeat for several.')
+    p.add_argument('--follow-links', action='store_true',
+                   help='also read the protocol, dataset, code and sequence links printed in the report (downloads public files)')
     p.add_argument('--samples', help='your sample list (.csv or .xlsx, one row per sample: sample, date, site, latitude, longitude, …)')
     p.add_argument('--edits', help='a review CSV with your corrections in the your_value column (one report only)')
     p.add_argument('--save-profile', metavar='FILE', help='save the corrections from --edits into this profile (JSON)')
@@ -3574,9 +4426,10 @@ def main(argv=None):
         name = re.sub(r'[^A-Za-z0-9._-]+', '_', f.stem).strip('_') or 'report'
         if stems.count(f.stem) > 1: name += '_' + f.suffix.lstrip('.').lower()     # report.doc + report.pdf
         try:
-            s = process_report(f, args.template, args.out, name, profile, args.local_ai, edits, args.samples)
+            s = process_report(f, args.template, args.out, name, profile, args.local_ai, edits, args.samples, args.source, args.follow_links)
             r = s['review']
-            print(f'✓ {f.name}: {len(s["assays"])} assays, {s["sampleRows"]} sample rows -> {s["output"]}')
+            print(f'✓ {f.name}: {len(s["assays"])} assays, {s["sampleRows"]} sample rows' +
+                  ''.join(f', {n} {k} rows' for k, n in (s.get('taxa') or {}).items()) + f' -> {s["output"]}')
             print(f'    {r["ok"]} values accepted automatically · {r["check"]} to check · {r["missing"]} not found '
                   f'({r["missing_required"]} mandatory/highly recommended) -> {s["review_csv"]}')
             for v in s['validation']['fixed']: print(f'    fixed: {v["sheet"]}.{v["term"]} {v["what"]} ({v["cells"]} cells)')

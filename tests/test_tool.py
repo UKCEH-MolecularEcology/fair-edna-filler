@@ -268,6 +268,71 @@ check(set(rows4) == {'A1', 'A_FB', 'EXT_BLANK_1'} and rows4['A1'][0]['eventDate'
       and rows4['A_FB'][0]['neg_cont_type'] == 'field negative' and rows4['EXT_BLANK_1'][0]['neg_cont_type'] == 'extraction negative'
       and rows4['A1'][0]['decimalLatitude'] == '54.1', 'a sample list gives one row per sample, with dates, coordinates and blanks')
 
+# ── 8. extra sources (protocol, dataset record, GitHub, SRA) – offline, with canned responses ──
+O = server.FETCH_OVERRIDES
+O['https://api.datacite.org/dois/10.5281/zenodo.111?affiliation=true'] = json.dumps({'data': {'attributes': {
+    'creators': [{'givenName': 'Ann', 'familyName': 'Lee', 'nameIdentifiers': [{'nameIdentifier': '0000-0001-0000-0001', 'nameIdentifierScheme': 'ORCID'}],
+                  'affiliation': [{'name': 'University of Testing', 'affiliationIdentifier': 'https://ror.org/000000000'}]}],
+    'rightsList': [{'rights': 'Creative Commons Attribution 4.0 International', 'rightsUri': 'https://creativecommons.org/licenses/by/4.0/'}]}}}).encode()
+O['https://zenodo.org/api/records/111/files'] = json.dumps({'entries': []}).encode()
+G = 'https://raw.githubusercontent.com/ann/edna/main/'
+O['https://api.github.com/repos/ann/edna'] = b'{"default_branch": "main"}'
+O['https://api.github.com/repos/ann/edna/git/trees/main?recursive=1'] = json.dumps({'tree': [
+    {'path': p, 'type': 'blob', 'size': 10} for p in ('README.md', 'samples.csv', 'reads.csv', 'blanks.csv')]}).encode()
+O[G + 'README.md'] = b"Blanks: NEG (PCR negative), 'EB' (e.g. XEB1) are extraction blanks, 'BK' is a field blank."
+O[G + 'samples.csv'] = b'sample,type,site,date,time,volume_filtered,notes\nA1,W,Lake A,07/06/2023,10:15,800,clear\nA2,W,Lake A,07/06/2023,10:30,750,\n'
+O[G + 'reads.csv'] = (b'"",A1,A2,ABK1,AEB1,NEG01,taxonomy\nRana_temporaria,10,0,0,0,0,"d__Eukaryota; p__Chordata; c__Amphibia; o__Anura; f__Ranidae; g__Rana; s__Rana_temporaria"\n'
+                      b'Salmo_trutta,500,90,3,0,0,"d__Eukaryota; p__Chordata; c__Actinopteri; o__Salmoniformes; f__Salmonidae; g__Salmo; s__Salmo_trutta"\n')
+O[G + 'blanks.csv'] = b'blank,sample\nABK1,A1\nABK1,A2\nAEB1,A1\nNEG01,A1\n'
+O['https://www.ebi.ac.uk/ena/portal/api/search?result=read_run&query=study_accession=PRJNA999&fields=run_accession,library_name,sample_alias,'
+  'sample_accession,instrument_model,library_layout,read_count,fastq_ftp,fastq_md5'] = (
+    b'run_accession\tlibrary_name\tsample_alias\tsample_accession\tinstrument_model\tlibrary_layout\tread_count\tfastq_ftp\tfastq_md5\n'
+    b'SRR1\tL1\tA1\tS1\tIllumina MiSeq\tPAIRED\t1000\tftp/x/SRR1_1.fastq.gz;ftp/x/SRR1_2.fastq.gz\taaa;bbb\n')
+with tempfile.TemporaryDirectory() as tmp:
+    proto = Path(tmp) / 'protocol.txt'
+    proto.write_text("""DOI https://dx.doi.org/10.17504/protocols.io.test123/v1
+Section 7 Library Preparation
+22 Step 1: first PCR PCR1
+1. Use primers 12S-V5-F (5'-ACTGGGATTAGATACCCC-3') and 12SV5-R (5'-TAGAACAGGCTCCTCTAG-3').
+2. Prepare PCR1 reactions in triplicate for each sample:
+12.5 µL Q5 Master Mix
+7 µL molecular-grade water
+1.5 µL of each 10 µM tagged primer
+2 µL template DNA
+3. Run PCR1 with the following conditions:
+98°C for 5 mins
+35 cycles of 98°C for 10s, 58°C for 20s and 72°C for 30s
+72°C for 7 minutes
+Step 3: PCR2 - Indexing
+1. Prepare duplicate 50 µL PCR2 reactions:
+25 µL Q5 Master Mix
+4 µL cleaned template DNA
+""", encoding='utf-8')
+    m5 = server.prepare(text, sources=[str(proto), '10.5281/zenodo.111', 'https://github.com/ann/edna', 'PRJNA999'])
+    wb5 = Path(tmp) / 'multi.xlsx'
+    s5 = server.fill_workbook(template, m5, 'x', wb5)
+r5 = {it['id']: it for it in server.review(m5, template)}
+a12 = next(i for i, a in enumerate(m5['assays']) if a['marker'] == '12S')
+check(r5[f'assay:{a12}:annealingTemp']['value'] == '58' and r5[f'assay:{a12}:pcr_cycles']['value'] == '35'
+      and r5[f'assay:{a12}:amplificationReactionVolume']['value'] == '24.5' and 'protocols.io' in ' '.join(r5[f'assay:{a12}:annealingTemp']['reasons']),
+      'protocol: PCR recipe and cycling read from step lists, with the protocol as source')
+check(r5['project:nucl_acid_amp']['value'] if 'project:nucl_acid_amp' in r5 else r5[f'assay:{a12}:nucl_acid_amp']['value'] == 'https://doi.org/10.17504/protocols.io.test123/v1',
+      'protocol DOI used for nucl_acid_amp')
+check(r5['project:recordedByID']['value'] == 'https://orcid.org/0000-0001-0000-0001' and 'Creative Commons' in r5['project:license']['value'],
+      'dataset record: ORCIDs and licence')
+names = {rec['samp_name']: rec for rec, _, _ in server.build_samples(m5)}
+check(set(names) == {'A1', 'A2', 'ABK1', 'AEB1', 'NEG01'} and names['ABK1']['neg_cont_type'] == 'field negative'
+      and names['AEB1']['neg_cont_type'] == 'extraction negative' and names['NEG01']['neg_cont_type'] == 'PCR negative',
+      'GitHub: samples from the data table, controls named via the README legend')
+check(names['A1']['rel_cont_id'] == 'ABK1 | AEB1 | NEG01' and names['A1']['eventDate'] == '2023-06-07T10:15' and names['A1']['_extra'].get('sample_type') == 'W',
+      'blank links, date + time, unmatched columns kept as user-defined columns')
+check(names['A1']['_run'].get('filename') == 'SRR1_1.fastq.gz' and names['A1']['_run'].get('checksum_filename') == 'aaa'
+      and names['A1']['_run'].get('output_read_count') == '510', 'SRA run files and read counts linked to their sample')
+check(s5['taxa'].get('taxaRaw') == 2, 'taxaRaw filled from the read table')
+check(server.find_links('Data on Zenodo (https:// doi. org/ 10. 5281/ zenodo. 15723454) and GitHub (https:// github. com/ ann/ ed na ). BioProject PRJNA1345715.')
+      == ['10.5281/zenodo.15723454', 'https://github.com/ann/edna', 'PRJNA1345715'], 'links found in PDF text with broken spacing')
+O.clear()
+
 print()
 if failures:
     print(f'{len(failures)} check(s) failed.')

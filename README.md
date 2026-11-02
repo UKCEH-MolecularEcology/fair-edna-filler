@@ -39,6 +39,7 @@ The tool does **not** modify `taxaRaw`, `taxaFinal`, `ampData`, `stdData`, or `e
 | Input | Description |
 |---|---|
 | **Report file** | `.docx`, `.pdf`, `.doc`, or `.txt` |
+| **Links** *(optional)* | protocols.io, Zenodo/Dryad/Figshare, GitHub, BioProject – see [More sources](#more-sources-than-the-report) |
 | **Sample list** *(optional)* | `.csv` or `.xlsx`, one row per sample — gives one sampleMetadata row (and one run row per assay) for each sample |
 | **FAIRe template** *(optional)* | The official FAIRe FULL template is built in ([`template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx`](template/FAIRe_checklist_v1.0.2_FULLtemplate.xlsx)). Only choose a template to use a different one, e.g. made with FAIRe-ator. |
 | **Claude API key** *(optional, off by default)* | Only for reports that are **not confidential** — see [Privacy](#privacy-and-how-values-are-found) |
@@ -111,6 +112,35 @@ print(summary["notes"])                # things to check by hand
 | `FAIRE_TOOL_PORT` | `8787` | Port |
 
 ---
+
+## More sources than the report
+
+A paper or report rarely holds everything FAIRe asks for. The detail is usually spread across a protocol, a dataset archive, a code repository and a sequence archive. Give the tool those links, or let it follow the ones printed in the report, and it combines them:
+
+| Source | What it adds |
+|---|---|
+| **protocols.io** link/DOI, or a protocol PDF | Full PCR recipes and cycling (including the indexing PCR), thermocycler, sterilisation, bioinformatics settings (trimming, merging, length filter, denoising, chimera check, taxonomy thresholds, contamination thresholds); the protocol DOI goes into `nucl_acid_ext` / `nucl_acid_amp` / `sop_bioinformatics` |
+| **Zenodo / Dryad / Figshare** DOI | Authors with ORCIDs, licence, the data-holding institution and its ROR ID; small data and code files inside the record |
+| **GitHub** repository | `code_repo`; sample tables (one row per sample, with dates, volumes, notes); blank–sample links (`rel_cont_id`); control naming from the README; taxon × sample read tables → `taxaRaw` / `taxaFinal` and read counts per sample |
+| **BioProject** (PRJNA…, PRJEB…) | Instrument, layout, file names, MD5 checksums and run accessions – per sample when runs are per sample. Pooled libraries can be linked through a `library` column in your sample list |
+| Local files (`.csv`, `.xlsx`, `.R`, `.zip`, protocol `.pdf`) | The same, without going online |
+
+```bash
+python3 server.py paper.pdf --follow-links                       # read the links printed in the paper
+python3 server.py paper.pdf --source 10.17504/protocols.io.xxxx/v1 --source 10.5281/zenodo.123 \
+                            --source https://github.com/me/repo --source PRJNA123
+```
+
+Each value records its source, e.g. "from protocols.io" or "taken from protocols.io; the report says …". Where sources disagree, the more specific one wins and the value is flagged for a look:
+- the protocol wins for methods;
+- the dataset record wins for ORCIDs, licence and institution;
+- data files win for samples.
+
+Columns in your data files that have no FAIRe term are kept as user-defined columns at the end of `sampleMetadata`.
+
+**Privacy:** nothing is fetched unless you give a link or tick *follow links*, and only public records are downloaded; the report itself never leaves your computer. Online sources work in Python and Colab; the browser page reads the report only.
+
+On Cowgill et al. 2026, the paper alone filled 25 of 86 checkable project terms correctly. Adding protocols.io, Zenodo, GitHub and the BioProject raised this to 74, and most of the rest differ only in wording. It also filled one row per sample, linked to its blanks, and filled `taxaRaw`. This was tested offline with captured responses.
 
 ## Automatic review
 
