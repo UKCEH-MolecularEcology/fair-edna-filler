@@ -327,7 +327,7 @@ What keeps them in step:
 
 ## How to cite
 
-Please cite the archived release: FAIRe Metadata Filler, https://doi.org/10.5281/zenodo.23896995
+Please cite the archived release: FAIRe Metadata Filler, https://doi.org/10.5281/zenodo.23896995 (all versions; this DOI always points to the latest). To cite a specific version, use its own DOI, e.g. v1.1: https://doi.org/10.5281/zenodo.23896996.
 
 ## Licence
 
