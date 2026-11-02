@@ -8,9 +8,13 @@ on:
     - cron: '23 5 1 1,7 *'   # 05:23 UTC on 1 January and 1 July
   workflow_dispatch:         # "Run workflow" button in the Actions tab
 
+# Write access is requested here, so this works even when the organisation's default
+# workflow permission is read-only. If the organisation does not allow Actions to open
+# pull requests, the update is pushed to a branch and an issue is opened instead.
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
   check:
@@ -65,7 +69,9 @@ jobs:
           } > "$RUNNER_TEMP/pr-body.md"
 
       - name: Open a pull request
+        id: pr
         if: steps.check.outputs.changed == 'true'
+        continue-on-error: true
         uses: peter-evans/create-pull-request@v7
         with:
           branch: template-update/v${{ steps.check.outputs.new }}
@@ -78,6 +84,21 @@ jobs:
             README.md
             index.html
           delete-branch: true
+
+      - name: If a pull request is not allowed, open an issue instead
+        if: steps.check.outputs.changed == 'true' && steps.pr.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW: ${{ steps.check.outputs.new }}
+        run: |
+          {
+            echo "_GitHub Actions is not allowed to open pull requests in this organisation, so the update is on the branch \`template-update/v$NEW\`._"
+            echo
+            echo "**To apply it:** open https://github.com/${{ github.repository }}/compare/main...template-update/v$NEW and click *Create pull request*."
+            echo
+            cat "$RUNNER_TEMP/pr-body.md"
+          } > "$RUNNER_TEMP/issue-body.md"
+          gh issue create --repo "${{ github.repository }}" --title "FAIRe template v$NEW available" --body-file "$RUNNER_TEMP/issue-body.md"
 
       - name: Flag failing checks
         if: steps.check.outputs.changed == 'true' && steps.tests.outcome != 'success'

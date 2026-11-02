@@ -281,7 +281,7 @@ fair-edna-filler/
 
 On **1 January and 1 July** the *Check for a new FAIRe template* workflow reads the [FAIRe download page](https://fair-edna.github.io/download.html). If it links to a different FULL template version, the workflow downloads it, runs `tests/test_tool.py` against it, and opens a **pull request** that switches the tool to the new version, with the test results in the description. Nothing changes until you merge it. To check right away: **Actions → Check for a new FAIRe template → Run workflow**.
 
-One-time setup: **Settings → Actions → General → Workflow permissions** → tick *Allow GitHub Actions to create and approve pull requests*.
+If the organisation allows it (**Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**), the update arrives as a pull request. Otherwise it is pushed to a branch `template-update/vX` and an issue links to it, so you can open the pull request with one click.
 
 Run the checks yourself with `python3 tests/test_tool.py` (or `python3 tests/test_tool.py some_template.xlsx` to try another template).
 
@@ -307,7 +307,7 @@ Issues and pull requests welcome. **All three versions run the same code:** ever
 What keeps them in step:
 - **Automatic rebuild.** When `server.py` or the page layout (`standalone/shell.html`) changes on `main`, the *Keep the browser version in step* workflow rebuilds `index.html`, tests it and commits it. GitHub Pages then republishes the online tool. Locally you can run `python3 build_standalone.py` yourself.
 - **Matching options.** `tests/test_tool.py` checks that the browser page, Colab and the command line all pass every option of `prepare()` (profile, sample list, extra sources, follow links…). It also checks that they all use the same review, fill and profile steps, and that every function the page or notebook calls exists. A new option added to `prepare()` makes the tests fail until all three interfaces offer it, or it is listed as an explicit exception (the local AI reader is Python-only).
-- **Repository setting:** for the automatic rebuild to push, enable **Settings → Actions → General → Workflow permissions → Read and write permissions**.
+- **Permissions:** the workflows ask for the write access they need in their own files, so they work even when the organisation keeps the default workflow permission at *read-only*. If the organisation does not allow Actions to open pull requests, the template check pushes its update to a branch and opens an issue with a link instead.
 
 ## Licence
 
